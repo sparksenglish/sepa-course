@@ -3234,6 +3234,27 @@ window.SEPA_START = function (fresh) {
     else btn = '<a class="btn primary" href="' + esc(s.link) + '" target="_blank" rel="noopener">' + IVID + ' Join the live session</a>';
     return when + btn;
   }
+  // Google Slides and Drive files are shown inside the app; anything else opens in a new tab
+  function embedUrl(u) {
+    var m = /^https:\/\/docs\.google\.com\/presentation\/d\/([\w-]+)/.exec(u || '');
+    if (m) return 'https://docs.google.com/presentation/d/' + m[1] + '/embed?start=false&loop=false&delayms=3000';
+    m = /^https:\/\/drive\.google\.com\/file\/d\/([\w-]+)/.exec(u || '');
+    return m ? 'https://drive.google.com/file/d/' + m[1] + '/preview' : '';
+  }
+  function matHTML(m) {
+    if (!m.link) return '<div class="rowi"><span class="txt"><b>' + esc(m.t) + '</b><small>Your trainer will add this soon</small></span></div>';
+    var e = embedUrl(m.link);
+    if (!e) return '<a class="rowi" href="' + esc(m.link) + '" target="_blank" rel="noopener"><span class="txt"><b>' + esc(m.t) + '</b><small>Opens in a new tab</small></span>' + I.arrow + '</a>';
+    return '<div class="bcmat"><div class="bcmath"><b>' + esc(m.t) + '</b><span class="bcmatb"><button class="btn sm" data-bcfs="1">Full screen</button><a class="btn sm" href="' + esc(m.link) + '" target="_blank" rel="noopener">Open in a new tab</a></span></div>' +
+      '<div class="bcviewer"><iframe src="' + esc(e) + '" title="' + esc(m.t) + '" loading="lazy" allowfullscreen referrerpolicy="no-referrer"></iframe></div>' +
+      '<p class="hiddennote" style="margin:0;font-style:normal">Not loading? You may be offline. Use Open in a new tab.</p></div>';
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest('[data-bcfs]'); if (!t) return;
+    var box = t.closest('.bcmat'), f = box && box.querySelector('.bcviewer'), l = box && box.querySelector('a[href]');
+    try { if (f && f.requestFullscreen) { f.requestFullscreen(); return; } } catch (er) {}
+    if (l) window.open(l.href, '_blank', 'noopener');
+  });
   function textHTML(x) {
     var out = '', list = [];
     String(x || '').split('\n').forEach(function (line) {
@@ -3311,8 +3332,8 @@ window.SEPA_START = function (fresh) {
     var open = dayOpen(s), st = dayStatus(d, h, rv, s);
     var ro = !!(rv && rv.res !== 'revise');
     var mats = di.items.filter(function (x) { return x.kind === 'Material'; });
-    var side = '<section class="card bclive"><h3>Live session</h3>' + liveHTML(s) + '</section>' +
-      (mats.length ? '<section class="card"><h3>Slides and materials</h3><div class="bcmats">' + mats.map(function (m) { return m.link ? '<a class="rowi" href="' + esc(m.link) + '" target="_blank" rel="noopener"><span class="txt"><b>' + esc(m.t) + '</b><small>Opens in a new tab</small></span>' + I.arrow + '</a>' : '<div class="rowi"><span class="txt"><b>' + esc(m.t) + '</b><small>Your trainer will add this soon</small></span></div>'; }).join('') + '</div></section>' : '');
+    var side = '<section class="card bclive"><h3>Live session</h3>' + liveHTML(s) + '</section>';
+    var slides = mats.length ? '<section class="card bcslides"><h3>Slides and materials</h3>' + mats.map(matHTML).join('') + '</section>' : '';
     var top = '<div class="pagebar">' + backBtn('bootcamp', 'Bootcamp') + '<h1 class="title">Day ' + d + '</h1><span></span></div>' +
       '<section class="card bchero"><span class="bcnum">Day ' + d + '</span><h2>' + esc(di.t || 'Day ' + d) + '</h2>' + (di.x ? '<p>' + esc(di.x) + '</p>' : '') + '<span class="bcst st-' + st.k + '">' + esc(st.label) + '</span></section>';
     var main;
@@ -3331,7 +3352,7 @@ window.SEPA_START = function (fresh) {
         '<button class="btn primary" data-bchand="' + d + '">' + (h.at ? 'Hand in again' : 'Hand in Day ' + d + ' homework') + '</button><p class="pgstatus" role="status" id="bchand-st"></p></section>';
       main = rvBox + '<h2 class="blocktitle">Homework</h2>' + (due ? '<p class="lead" style="margin:-4px 0 8px">' + esc(due) + '</p>' : '') + out + foot;
     }
-    return top + '<div class="bcdaygrid"><div class="bcmain">' + main + '</div><aside class="bcside">' + side + '</aside></div>';
+    return top + '<div class="bcdaygrid"><div class="bcmain">' + slides + main + '</div><aside class="bcside">' + side + '</aside></div>';
   }
 
   /* ---------- participant: actions ---------- */
@@ -3523,7 +3544,7 @@ window.SEPA_START = function (fresh) {
   }
   /* trainers: edit bootcamp content */
   var KINDS = ['Material', 'Info', 'Quiz', 'Written', 'Notes', 'Video', 'Voice', 'Upload', 'Tick', 'Day'];
-  var KHELP = { Day: 'The day\'s name (Title) and intro (Text). Setting: meets or 1-4; Lines: scoring criteria for 1-4.', Material: 'A link to slides or a handout.', Info: 'A card of text. Lines starting with "- " become bullets.', Quiz: 'Title = the question. Lines = options, the FIRST is correct (the app shuffles them). Text = explanation shown after checking.', Written: 'Lines = questions (one answer box each). Setting = words per answer, e.g. 40-120.', Notes: 'An optional box, not marked.', Video: 'Lines = self-check before recording. Setting = longest minutes (1–5).', Voice: 'Like Video, sound only.', Upload: 'Lines = checklist. Link = template (participants get "Make my copy").', Tick: 'A sentence to tick (optional).' };
+  var KHELP = { Day: 'The day\'s name (Title) and intro (Text). Setting: meets or 1-4; Lines: scoring criteria for 1-4. Link: the live session link, used when the Schedule tab has none for that batch.', Material: 'A link to slides or a handout. Google Slides and Drive files open inside the app.', Info: 'A card of text. Lines starting with "- " become bullets.', Quiz: 'Title = the question. Lines = options, the FIRST is correct (the app shuffles them). Text = explanation shown after checking.', Written: 'Lines = questions (one answer box each). Setting = words per answer, e.g. 40-120.', Notes: 'An optional box, not marked.', Video: 'Lines = self-check before recording. Setting = longest minutes (1–5).', Voice: 'Like Video, sound only.', Upload: 'Lines = checklist. Link = template (participants get "Make my copy").', Tick: 'A sentence to tick (optional).' };
   function contentHTML() {
     if (!BCX.rows) { if (!BCX.loadingRows) { BCX.loadingRows = true; S.call('bootRows', {}).then(function (r) { BCX.rows = r.rows; BCX.loadingRows = false; if (current === 'bct') rerender(); }, function (e) { BCX.loadingRows = false; BCX.msg = e.message; if (current === 'bct') rerender(); }); } return '<p class="pgstatus">Loading…</p>'; }
     var d = BCX.editDay, list = BCX.rows.filter(function (r) { return r.day === d; }).sort(function (a, b) { return a.o - b.o || a.row - b.row; });
@@ -3807,6 +3828,12 @@ window.SEPA_START = function (fresh) {
     '.bcwhen{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0 0 10px}',
     '.bclive .btn{width:100%;justify-content:center}',
     '.bcmats{display:flex;flex-direction:column;gap:8px}',
+    '.bcmat{display:flex;flex-direction:column;gap:8px}',
+    '.bcmath{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}',
+    '.bcmatb{display:flex;gap:8px;flex-wrap:wrap}',
+    '.bcviewer{position:relative;aspect-ratio:16/9;width:100%;border-radius:14px;overflow:hidden;border:1.5px solid var(--line);background:#EEF0F3}',
+    '.bcviewer iframe{position:absolute;inset:0;width:100%;height:100%;border:0}',
+    '.bcviewer:fullscreen{border-radius:0;border:0;aspect-ratio:auto}',
     '.bcitem{display:flex;flex-direction:column;gap:10px}',
     '.bcitem h3{margin:0}',
     '.bcopt-tag{font-size:12px;font-weight:700;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:2px 8px;vertical-align:2px}',
