@@ -3697,39 +3697,37 @@ window.SEPA_START = function (fresh) {
     var box = '<button class="nextbox" data-go="bct"><span><b>Bootcamp' + (n ? ' · ' + n + ' to review' : '') + '</b><small>Attendance, homework reviews and unlocking the course</small></span>' + I.arrow + '</button>';
     return PG.trainer ? h.replace('</header>', '</header>' + box) : h;
   };
-  // Home: the welcome card under the SEPA COURSE title (while the course is locked),
-  // then a one-line link to homework and feedback until all 3 days are reviewed
-  function liveNow(s) {
-    if (!s || !s.date || !s.link) return false;
-    var t = jkt(), st = toMin(s.start), en = toMin(s.end);
-    return t.date === s.date && (st == null || t.min >= st - 15) && (en == null || t.min <= en);
+  // Home: the Bootcamp card (topic-card style) under the SEPA COURSE title,
+  // shown until all 3 days are reviewed; joining and homework live on the Bootcamp page
+  // progress: each day is a third; within a day every required task counts, and handing in is the last step
+  function progressPct() {
+    var sum = 0;
+    DAYS.forEach(function (d) {
+      var req = required(d), h = (PR.bc || {})[d] || {}, a = h.a || {};
+      var done = req.filter(function (it) { return itemDone(it, a); }).length;
+      sum += (done + (h.at ? 1 : 0)) / (req.length + 1);
+    });
+    return Math.round(sum / DAYS.length * 100);
+  }
+  function rangeLabel(sch) {
+    var a = sch.days[1] && sch.days[1].date, b = sch.days[3] && sch.days[3].date;
+    if (!a || !b) return '3 online days';
+    var f = function (x) { return new Date(x + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }); };
+    return '3 online days · ' + f(a) + ' – ' + f(b);
   }
   function welcomeHTML() {
-    var sch = mySched() || { days: {} };
-    var days = DAYS.map(function (d) {
-      var di = dayInfo(d), s = sch.days[d], st = dayStatus(d, (PR.bc || {})[d] || {}, myReview(d), s);
-      return '<div class="bcwday st-' + st.k + '"><span class="bcnum">Day ' + d + '</span><b>' + esc(di.t || 'Day ' + d) + '</b>' +
-        '<small>' + ICAL + ' ' + (s && s.date ? esc(dayLabel(s.date)) + (timeLabel(s) ? ' · ' + esc(timeLabel(s)) : '') : 'Date to be announced') + '</small>' +
-        '<span class="bcst">' + esc(st.label) + '</span>' +
-        '<span class="bcwacts">' + (liveNow(s) ? '<a class="btn primary sm" href="' + esc(s.link) + '" target="_blank" rel="noopener">' + IVID + ' Join now</a>' : '') +
-        '<button class="btn sm" data-go="bc' + d + '">Open Day ' + d + '</button></span></div>';
-    }).join('');
-    return '<section class="card bcwelcome" id="bcwelcome" aria-label="Bootcamp"><div class="bcwhead">' + (window.SEPA_ICON ? '<img alt="" src="' + window.SEPA_ICON + '">' : '') +
-      '<div><h2>Welcome to SPARKS English Bootcamp ' + esc(sch.name || '') + '</h2><p>3 online days. Join each live session and hand in the homework. Your self-paced course opens after the bootcamp.</p></div></div>' +
-      '<div class="bcwdays">' + days + '</div>' +
-      '<div class="acts"><button class="btn primary" data-go="bootcamp">Open Bootcamp</button></div></section>' +
-      '<p class="bclocknote">' + LOCK + ' Your course opens after your bootcamp</p>';
+    var sch = mySched() || { days: {} }, p = progressPct();
+    return '<button class="tcard bccard" id="bcwelcome" data-go="bootcamp"><span class="num">BOOTCAMP' + (sch.name ? ' · ' + esc(sch.name).toUpperCase() : '') + '</span>' +
+      '<h3>Welcome to SPARKS English Bootcamp</h3><p>' + esc(rangeLabel(sch)) + '</p>' +
+      '<span class="tbar"><span class="bar" aria-hidden="true"><i style="width:' + p + '%"></i></span><b>' + p + '%</b></span></button>' +
+      (locked() ? '<p class="bclocknote">' + LOCK + ' Your self-paced course opens after your bootcamp</p>' : '');
   }
   var prevHome = homePage;
   homePage = function () {
     var h = prevHome();
     if (!applies()) return h;
-    var box;
-    if (locked()) box = welcomeHTML();
-    else {
-      if (DAYS.every(function (d) { var rv = myReview(d); return rv && rv.res !== 'revise'; })) return h;
-      box = '<button class="nextbox bchome" data-go="bootcamp"><span><b>Bootcamp</b><small>See your homework and feedback</small></span>' + I.arrow + '</button>';
-    }
+    if (!locked() && DAYS.every(function (d) { var rv = myReview(d); return rv && rv.res !== 'revise'; })) return h;
+    var box = welcomeHTML();
     var i = h.indexOf('<section');
     return i < 0 ? h + box : h.slice(0, i) + box + h.slice(i);
   };
@@ -3847,24 +3845,14 @@ window.SEPA_START = function (fresh) {
     '.bcpick input:checked+span{background:var(--green);border-color:var(--green);color:#fff}',
     '.bcpick input:focus-visible+span{outline:3px solid var(--green);outline-offset:2px}',
     '.bchome{margin-bottom:4px}',
-    '.bcwelcome{display:flex;flex-direction:column;gap:14px;border:1.5px solid color-mix(in srgb,var(--green) 40%,var(--line));background:linear-gradient(135deg,color-mix(in srgb,var(--green) 9%,var(--card,#fff)) 0%,var(--card,#fff) 70%);transition:box-shadow .3s}',
-    '.bcwelcome.flash{box-shadow:0 0 0 4px color-mix(in srgb,var(--green) 45%,transparent)}',
-    '.bcwhead{display:flex;gap:14px;align-items:flex-start}',
-    '.bcwhead img{width:44px;height:44px;flex:none}',
-    '.bcwhead h2{margin:0;font-size:22px;line-height:1.25}',
-    '.bcwhead p{margin:6px 0 0;color:var(--muted)}',
-    '.bcwdays{display:grid;gap:10px}',
-    '@media (min-width:760px){.bcwdays{grid-template-columns:repeat(3,minmax(0,1fr))}}',
-    '.bcwday{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:var(--card,#fff)}',
-    '.bcwday b{line-height:1.3}',
-    '.bcwday small{display:flex;gap:6px;align-items:center;color:var(--muted);font-weight:600}',
-    '.bcwday .bcst{margin-top:4px}',
-    '.bcwacts{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}',
-    '.bcwelcome .acts{margin:0}',
+    '.tcard.bccard{width:100%;background:linear-gradient(135deg,#0B2A6F 0%,#1B4C97 48%,#5E9E2F 100%);transition:transform .15s,box-shadow .3s}',
+    '.tcard.bccard .tbar .bar i{background:#FCD535}',
+    '.tcard.bccard.flash{box-shadow:0 0 0 4px rgba(94,158,47,.55)}',
+    '@media (min-width:900px){.tcard.bccard{padding:22px 26px}.tcard.bccard h3{font-size:32px}}',
     '.bclocknote{display:none;align-items:center;gap:8px;margin:0;font-weight:700;color:var(--muted)}',
     '.bclocknote svg{width:18px;height:18px}',
     'body.bc-locked .bclocknote{display:flex}',
-    'body.bc-locked #app > section:not(.bcwelcome){opacity:.5;filter:grayscale(.35)}',
+    'body.bc-locked #app > section{opacity:.5;filter:grayscale(.35)}',
     '.bcwho{display:flex;justify-content:space-between;align-items:center;gap:12px}',
     '.bcwho>div{display:flex;flex-direction:column;gap:2px;min-width:0}',
     '.bcwho small{color:var(--muted);font-weight:600;overflow-wrap:anywhere}',
