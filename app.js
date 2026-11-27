@@ -3434,7 +3434,7 @@ window.SEPA_START = function (fresh) {
     try { BCX.roster = await S.call('bootRoster', {}); }
     catch (e) { BCX.msg = e.message || 'Could not load the participants.'; if (!BCX.roster) BCX.roster = { people: [], batches: {} }; }
     BCX.rosterAt = Date.now(); BCX.rosterLoading = false;
-    if (current === 'bct' || /^bcr-/.test(current || '')) rerender();
+    if (current === 'bct' || /^bcr-/.test(current || '') || (current === 'home' && isTrainer())) rerender();
   }
   function batches() {
     var d = data(), out = {};
@@ -3665,6 +3665,7 @@ window.SEPA_START = function (fresh) {
     var h = location.hash.slice(1) || 'home', html = null, page = 'home';
     if (BCX.rec && BCX.rec.state === 'live' && h !== current) { try { BCX.rec.recorder.stop(); } catch (e) {} stopTracks(); BCX.rec = null; }
     if (h === 'bct') { page = 'review'; html = trainerHTML(); }
+    else if (h === 'home' && isTrainer() && window.SEPA_dashHTML) { page = 'home'; html = window.SEPA_dashHTML(); }
     else if (/^bcr-[\w-]+-[123]$/.test(h)) { var m = /^bcr-([\w-]+)-([123])$/.exec(h); page = 'review'; html = reviewHTML(m[1], +m[2]); }
     else if (locked() && !ALLOWED_LOCKED.test(h)) { BCX.focusCard = true; location.replace('#home'); return; }
     else if (applies() && h === 'bootcamp') { page = 'home'; html = overviewHTML(); }
@@ -3777,6 +3778,7 @@ window.SEPA_START = function (fresh) {
     if (/^(home|bootcamp|bc[123]|topics|tasks|me)$/.test(current || '') || locked()) { if (!(document.activeElement && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName))) rerender(); }
     else if (current === 'bct' || /^bcr-/.test(current || '')) { if (!(document.activeElement && /^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement.tagName))) rerender(); }
   };
+  window.SEPA_bcApi = { BCX: BCX, DAYS: DAYS, norm: norm, jkt: jkt, data: data, rec: rec, cellStatus: cellStatus, loadRoster: loadRoster, batches: batches, rerender: rerender };
   window.SEPA_bootcamp = { state: function () { return { applies: applies(), locked: locked(), sched: mySched() }; }, BCX: BCX };
 
   /* ---------- layout: phone, tablet and laptop ---------- */
@@ -3913,4 +3915,227 @@ window.SEPA_START = function (fresh) {
   document.head.appendChild(css);
 })();
 /* END bootcamp.js */
+/* ===== dash.js ===== */
+/* =================== Trainer Home dashboard (version 2.2) ===================
+ * Trainers open Home to "My Teachers": KPI tiles and a Top Focus list for the bootcamp AND the self-paced SEPA course.
+ * Everything is computed on the device from data the trainer already receives (progress, reviews, bootcamp records, roster).
+ * Limits: STUCK_DAYS without activity = stuck; NOSTART_DAYS after unlocking with 0% = not started.
+ */
+(function () {
+  var S = window.SEPA;
+  var DASH = { batch: '', view: 'focus', open: {} };   // batch: '' = all, '~' = no batch, else a normalised batch name
+  var STUCK_DAYS = 7, NOSTART_DAYS = 3, MAXROWS = 60;
+  var api = function () { return window.SEPA_bcApi; };
+  var isTr = function () { return !!(S.me && S.me.role === 'trainer'); };
+  var norm = function (s) { return String(s == null ? '' : s).trim().toLowerCase().replace(/\s+/g, ' '); };
+  function daysSince(s) {
+    if (!s) return null;
+    var d = new Date(String(s).slice(0, 10) + 'T00:00:00'), t = new Date(today() + 'T00:00:00');
+    return isNaN(d) ? null : Math.max(0, Math.round((t - d) / 864e5));
+  }
+  function waitTxt(s) { var n = daysSince(s); return n == null ? '' : n === 0 ? 'today' : n === 1 ? '1 day' : n + ' days'; }
+  var cmpNat = function (a, b) { return String(a).localeCompare(String(b), undefined, { numeric: true }); };
+
+  /* ---------- the numbers ---------- */
+  function everyone() {
+    var A = api(), R = A && A.BCX.roster; if (!R) return null;
+    var d = A.data(), jk = A.jkt(), out = [];
+    R.people.forEach(function (p) {
+      if (p.preview) return;
+      var pr = (PG.practice || {})[p.uid] || {}, P = pr.p || {}, T = pr.t || {}, r = A.rec(p.uid), att = r.att || {};
+      var sch = d && d.sched[A.norm(p.batch)], cs = {}, handed = 0, ready = true;
+      A.DAYS.forEach(function (x) { cs[x] = A.cellStatus(p.uid, x); if (cs[x].k !== 'none') handed++; if (cs[x].k !== 'done') ready = false; });
+      var overall = overallDone(P, T), unlocked = !!r.unlocked, anyAtt = Object.keys(att).some(function (k) { return att[k]; });
+      var stage = overall >= 100 ? 'done' : (!unlocked && !handed && !anyAtt && overall === 0) ? 'new' : (sch && !unlocked) ? 'boot' : 'course';
+      var cohort = (PG.cohort || []).filter(function (c) { return c.id === p.uid; })[0] || {};
+      out.push({ uid: p.uid, name: p.name, email: p.email, batch: p.batch || '', bk: p.batch ? A.norm(p.batch) : '~', sch: sch, cs: cs, handed: handed, ready: ready,
+        att: att, unlocked: unlocked, unlockedOn: r.unlocked || '', overall: overall, stage: stage, last: pr.updatedAt || '', P: P, T: T, cp: cohort.cp || {}, added: cohort.addedAt || '' });
+    });
+    return out;
+  }
+  function inBatch(p) { return !DASH.batch || p.bk === DASH.batch; }
+
+  function lists(all) {
+    var A = api(), jk = A.jkt(), L = { b1: [], b2: [], b3: [], s1: [], s2: [], s3: [], s4: [], s5: [] }, byUid = {};
+    all.forEach(function (p) { byUid[p.uid] = p; });
+    var row = function (p, text, since, go, tag) { return { uid: p.uid, name: p.name, batch: p.batch, text: text, since: since || '', go: go, tag: tag || '' }; };
+    all.forEach(function (p) {
+      if (!inBatch(p)) return;
+      // Bootcamp
+      A.DAYS.forEach(function (d) {
+        var c = p.cs[d]; if (c.k !== 'new') return;
+        var h = ((PG.practice[p.uid] || {}).bc || {})[d] || {}, again = /again/.test(c.label);
+        L.b1.push(row(p, 'Day ' + d + ' homework' + (again ? ' handed in again' : ''), h.at, 'data-go="bcr-' + p.uid + '-' + d + '"', h.late ? 'Late' : ''));
+      });
+      if (p.sch && !p.unlocked) {
+        var missed = A.DAYS.filter(function (d) { var s = p.sch.days[d]; return s && s.date && s.date < jk.date && !p.att[d]; });
+        if (missed.length) L.b2.push(row(p, 'Missed Day ' + missed.join(', Day '), p.sch.days[missed[0]].date, 'data-dbct="' + esc(p.bk) + '"'));
+        if (p.ready) {
+          var last = ''; A.DAYS.forEach(function (d) { var rv = ((PG.reviews || {})[p.uid] || {})['bc' + d]; if (rv && String(rv.atIso || rv.at) > last) last = String(rv.atIso || rv.at); });
+          L.b3.push(row(p, 'All 3 days reviewed. Ready to unlock the course', last, 'data-dbct="' + esc(p.bk) + '"'));
+        }
+      }
+      // SEPA course (only after the bootcamp, or when there is none)
+      if (p.stage === 'boot' || p.stage === 'new' && p.sch && !p.unlocked) return;
+      TOPICS.filter(function (t) { return !t.soon; }).forEach(function (t) {
+        var coreAll = coreDone(t.id, p.P) === coreOf(t.id).length, tl = tasksTotal(t.id), td = tasksDone(t.id, p.T);
+        if (coreAll && td < tl) L.s2.push(row(p, 'Topic ' + t.n + ': ' + (tl - td) + ' unit task' + (tl - td === 1 ? '' : 's') + ' left', p.last, 'data-dperson="' + esc(p.uid) + '"'));
+        var cpk = t.n === 1 ? 't1' : t.n === 2 ? 't2' : null;
+        if (cpk && coreAll && td === tl && tl > 0 && !p.cp[cpk]) L.s3.push(row(p, 'Topic ' + t.n + ' finished. Add the assessment result', p.last, 'data-dperson="' + esc(p.uid) + '"'));
+      });
+      var idle = daysSince(p.last);
+      if (p.stage === 'course' && p.overall > 0 && idle != null && idle >= STUCK_DAYS) L.s4.push(row(p, 'No activity for ' + idle + ' days · ' + p.overall + '% done', p.last, 'data-dperson="' + esc(p.uid) + '"'));
+      if (p.overall === 0 && !p.last) {
+        var from = p.unlockedOn || String(p.added || '').slice(0, 10), n0 = daysSince(from);
+        if (n0 != null && n0 >= NOSTART_DAYS) L.s5.push(row(p, (p.unlockedOn ? 'Unlocked ' : 'Added ') + n0 + ' days ago, no lesson yet', from, 'data-dperson="' + esc(p.uid) + '"'));
+      }
+    });
+    reviewItems().forEach(function (x) {
+      var p = byUid[x.pid]; if (!p || !inBatch(p) || isReviewed(x.s, x.rv)) return;
+      L.s1.push(row(p, keyLabel(x.key), x.s.at, 'data-rvopen="' + esc(rvId(x)) + '"', x.rv ? 'Resubmitted' : ''));
+    });
+    Object.keys(L).forEach(function (k) { L[k].sort(function (a, b) { return !a.since ? 1 : !b.since ? -1 : String(a.since).localeCompare(String(b.since)); }); });
+    return L;
+  }
+
+  /* ---------- pieces ---------- */
+  var LISTS = [
+    ['Bootcamp', [['b1', 'Homework waiting for review', 'Handed in and not yet scored, including resubmissions'], ['b2', 'Missed a live day', 'Attendance not ticked and the course is still locked'], ['b3', 'Ready to unlock', 'All 3 days handed in and reviewed']]],
+    ['SEPA self-paced course', [['s1', 'Writing and speaking to score', 'Unit tasks and assessments waiting for your score'], ['s2', 'Unit tasks not done', 'All core lessons complete but a unit task is open, so the next topic stays locked'], ['s3', 'Ready for a topic result', 'Topic finished and no assessment result added yet'], ['s4', 'Stuck', 'No activity for ' + STUCK_DAYS + ' days or more'], ['s5', 'Not started', 'Unlocked or added ' + NOSTART_DAYS + ' days ago or more with no lesson done']]]
+  ];
+  function rowHTML(r) {
+    return '<button class="drow" ' + r.go + '><span class="dmain"><b>' + esc(r.name) + '</b><small>' + esc(r.batch || 'No batch') + ' · ' + esc(r.text) + '</small></span><span class="dend">' +
+      (r.tag ? '<span class="ctag newtag">' + esc(r.tag) + '</span>' : '') + (r.since ? '<span class="dwait">' + esc(waitTxt(r.since)) + '</span>' : '') + I.arrow + '</span></button>';
+  }
+  function focusHTML(L) {
+    var firstOpen = null;
+    LISTS.forEach(function (g) { g[1].forEach(function (l) { if (!firstOpen && L[l[0]].length) firstOpen = l[0]; }); });
+    return '<p class="dsub">What needs you now, most urgent first. Each list opens with +. A list is empty when you\'re up to date.</p>' + LISTS.map(function (g) {
+      return '<h3 class="dgroup">' + esc(g[0]) + '</h3>' + g[1].map(function (l) {
+        var rows = L[l[0]], open = DASH.open[l[0]] != null ? DASH.open[l[0]] : l[0] === firstOpen;
+        return '<details class="dlist" data-dk="' + l[0] + '"' + (open ? ' open' : '') + '><summary><span class="dlt"><b>' + esc(l[1]) + '</b><small>' + esc(l[2]) + '</small></span><span class="dcount' + (rows.length ? ' on' : '') + '">' + rows.length + '</span><span class="dplus" aria-hidden="true"></span></summary>' +
+          (rows.length ? '<div class="drows">' + rows.slice(0, MAXROWS).map(rowHTML).join('') + (rows.length > MAXROWS ? '<p class="dsub">Showing the ' + MAXROWS + ' most urgent of ' + rows.length + '.</p>' : '') + '</div>' : '<p class="dempty">Nothing here. You\'re up to date.</p>') + '</details>';
+      }).join('');
+    }).join('');
+  }
+  function lvlOf(uid) { var b = pidLive(uid).band; return b == null ? null : b; }
+  function boardHTML(list) {
+    var rows = list.slice().sort(function (a, b) { return b.overall - a.overall || (lvlOf(b.uid) || 0) - (lvlOf(a.uid) || 0) || cmpNat(a.name, b.name); });
+    if (!rows.length) return '<div class="empty">No participants in this view.</div>';
+    return '<p class="dsub">Ranked by course progress, then level.</p><div class="tablewrap"><table class="bd cohort"><thead><tr><th scope="col">#</th><th scope="col">Participant</th><th scope="col">Batch</th><th scope="col">Course</th><th scope="col">Level</th><th scope="col">Last active</th></tr></thead><tbody>' +
+      rows.map(function (p, i) { return '<tr><td>' + (i + 1) + '</td><th scope="row"><button class="linkbtn" data-dperson="' + esc(p.uid) + '">' + esc(p.name) + '</button></th><td>' + esc(p.batch || '–') + '</td><td>' + p.overall + '%</td><td>' + bchip(lvlOf(p.uid)) + '</td><td>' + (p.last ? esc(waitTxt(p.last) === 'today' ? 'Today' : waitTxt(p.last) + ' ago') : '–') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+  }
+  function quizHTML(list) {
+    var by = {};
+    list.forEach(function (p) {
+      var q = ((PG.practice || {})[p.uid] || {}).q || {};
+      Object.keys(q).forEach(function (k) { var r = q[k]; if (!/^u\d+_(listen|read)$/.test(k) || !r || !r.n) return; var o = by[k] = by[k] || { n: 0, sum: 0, tries: 0 }; o.n++; o.sum += firstScore(r) / r.n; o.tries += r.tries || 1; });
+    });
+    var rows = Object.keys(by).map(function (k) { return { k: k, n: by[k].n, avg: Math.round(by[k].sum / by[k].n * 100), tries: Math.round(by[k].tries / by[k].n * 10) / 10 }; }).sort(function (a, b) { return a.avg - b.avg || cmpNat(a.k, b.k); });
+    if (!rows.length) return '<div class="empty">No quizzes taken yet in this view.</div>';
+    return '<p class="dsub">The course quizzes participants find hardest, lowest first-try score first. Answers are not stored per question, so this is per quiz.</p><div class="tablewrap"><table class="bd cohort"><thead><tr><th scope="col">Quiz</th><th scope="col">Taken by</th><th scope="col">First try</th><th scope="col">Tries</th></tr></thead><tbody>' +
+      rows.map(function (r) { return '<tr><th scope="row">' + esc(keyLabel(r.k)) + '</th><td>' + r.n + '</td><td><b>' + r.avg + '%</b></td><td>' + r.tries + '</td></tr>'; }).join('') + '</tbody></table></div>';
+  }
+
+  function dashHTML() {
+    var A = api(), me = S.me || {}, admin = !!me.admin;
+    var head = '<header class="top"><img class="logo" src="' + LOGO + '" alt="Sparks English" width="150" height="30"><button class="iconbtn" data-go="search" aria-label="Search phrases">' + I.search + '</button>' + bellBtn() + '<button class="avbtn" data-go="me" aria-label="My account"><span data-initial>' + esc(((PG.name || 'Y').trim().charAt(0) || 'Y').toUpperCase()) + '</span></button></header>';
+    var all = everyone();
+    if (!all) { if (A) A.loadRoster(false); return head + '<div class="dhead"><div><small class="dk">' + (admin ? 'L&amp;D ADMIN' : 'TRAINER') + '</small><h1 class="title dtitle">My Teachers</h1></div></div><p class="pgstatus" role="status">Loading…</p>'; }
+    // batch tabs
+    var counts = {}, names = {};
+    all.forEach(function (p) { counts[p.bk] = (counts[p.bk] || 0) + 1; names[p.bk] = p.batch || 'No batch'; });
+    var keys = Object.keys(counts).sort(function (a, b) { return a === '~' ? 1 : b === '~' ? -1 : cmpNat(names[a], names[b]); });
+    if (DASH.batch && !counts[DASH.batch]) DASH.batch = '';
+    var list = all.filter(inBatch), L = lists(all);
+    var c = { new: 0, boot: 0, course: 0, done: 0 }, att = {}, rowsN = 0, rev = 0;
+    list.forEach(function (p) { c[p.stage]++; });
+    Object.keys(L).forEach(function (k) { rowsN += L[k].length; L[k].forEach(function (r) { att[r.uid] = 1; }); });
+    rev = L.b1.length + L.s1.length;
+    var tiles = [['All participants', list.length], ['Not started', c.new], ['In bootcamp', c.boot], ['In course', c.course], ['Needs review', rev], ['Needs attention', Object.keys(att).length], ['Completed', c.done]];
+    var item = function (v, g, t, n) { return '<button class="dmi' + (DASH.view === v ? ' on' : '') + '" data-dview="' + v + '"><span class="dmg" aria-hidden="true">' + g + '</span><span>' + t + '</span>' + (n != null ? '<em>' + n + '</em>' : '') + '</button>'; };
+    var go = function (to, g, t, extra) { return '<button class="dmi" data-go="' + to + '"' + (extra || '') + '><span class="dmg" aria-hidden="true">' + g + '</span><span>' + t + '</span></button>'; };
+    var menu = '<nav class="dmenu card" aria-label="Trainer menu"><small class="dsec">TEACHERS</small>' + item('focus', '!', 'Top Focus', rowsN) + item('board', '#', 'Leaderboard') + go('trainer', '≡', 'All teachers') + item('quiz', '?', 'Quiz analysis') +
+      '<span class="dsep" aria-hidden="true"></span><small class="dsec">CONTENT</small>' + '<button class="dmi" data-go="bct" data-bctab="people"><span class="dmg" aria-hidden="true">▣</span><span>Bootcamp</span></button>' + go('content', '✎', 'Course content') + (admin ? '<button class="dmi" data-bctrain="1"><span class="dmg" aria-hidden="true">+</span><span>Add a trainer</span></button>' : '') + '</nav>';
+    var body = DASH.view === 'board' ? boardHTML(list) : DASH.view === 'quiz' ? quizHTML(list) : focusHTML(L);
+    var ttl = DASH.view === 'board' ? 'Leaderboard' : DASH.view === 'quiz' ? 'Quiz analysis' : 'Top Focus';
+    return head + '<div class="dhead"><div><small class="dk">' + (admin ? 'L&amp;D ADMIN' : 'TRAINER') + ' · ' + esc((DASH.batch ? names[DASH.batch] : 'All batches').toUpperCase()) + '</small><h1 class="title dtitle">My Teachers</h1></div>' +
+      '<div class="dacts"><button class="btn" data-drefresh="1">↻ Refresh</button><button class="btn" data-dcsv="1">Export CSV</button></div></div>' +
+      '<div class="dtabs" role="tablist" aria-label="Batch"><button role="tab" class="chip' + (!DASH.batch ? ' on' : '') + '" aria-selected="' + !DASH.batch + '" data-dbatch="">All batches <b>' + all.length + '</b></button>' +
+      keys.map(function (k) { return '<button role="tab" class="chip' + (DASH.batch === k ? ' on' : '') + '" aria-selected="' + (DASH.batch === k) + '" data-dbatch="' + esc(k) + '">' + esc(names[k]) + ' <b>' + counts[k] + '</b></button>'; }).join('') + '</div>' +
+      '<div class="dgrid">' + menu + '<div class="dmainpane"><div class="dkpis">' + tiles.map(function (t) { return '<div class="dtile"><small>' + t[0].toUpperCase() + '</small><b>' + t[1] + '</b></div>'; }).join('') + '</div>' +
+      '<section class="card dview"><h2 class="dvt">' + ttl + '</h2>' + body + '</section></div></div>';
+  }
+  window.SEPA_dashHTML = dashHTML;
+
+  /* ---------- CSV ---------- */
+  function exportCsv() {
+    var all = everyone(); if (!all) return;
+    var q = function (v) { v = String(v == null ? '' : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    var stage = { new: 'Not started', boot: 'In bootcamp', course: 'In course', done: 'Completed' };
+    var rows = [['Name', 'Email', 'Batch', 'Stage', 'Bootcamp days handed in', 'Course unlocked', 'Course %', 'Level', 'Last active']];
+    all.filter(inBatch).forEach(function (p) {
+      var b = lvlOf(p.uid);
+      rows.push([p.name, p.email, p.batch, stage[p.stage], p.sch ? p.handed + ' of 3' : '', p.sch ? (p.unlocked ? 'Yes' : 'No') : 'Open', p.overall, b == null ? '' : LVL[cefrOf(b)], p.last ? String(p.last).slice(0, 10) : '']);
+    });
+    var blob = new Blob(['﻿' + rows.map(function (r) { return r.map(q).join(','); }).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'sepa-participants-' + today() + '.csv';
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+  }
+
+  /* ---------- behaviour ---------- */
+  var again = function () { if (current === 'home' && isTr() && !(document.activeElement && /^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement.tagName))) api().rerender(); };
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest('[data-dview],[data-dbatch],[data-drefresh],[data-dcsv],[data-dperson],[data-dbct]'); if (!t) return;
+    var d = t.dataset;
+    if (d.dview) { DASH.view = d.dview; return again(); }
+    if (d.dbatch != null && t.hasAttribute('data-dbatch')) { DASH.batch = d.dbatch; return again(); }
+    if (t.hasAttribute('data-drefresh')) { var A = api(); A.loadRoster(true).then(again); if (window.SEPA_SYNC) SEPA_SYNC(); return; }
+    if (t.hasAttribute('data-dcsv')) return exportCsv();
+    if (d.dperson) { PG.sel = d.dperson; var row = (PG.cohort || []).filter(function (r) { return r.id === d.dperson; })[0] || { cp: {} }; PG.cpSel = (CPS.find(function (c) { return !c.soon && !(row.cp || {})[c.k]; }) || CPS[0]).k; if (location.hash === '#trainer') route(); else location.hash = 'trainer'; return; }
+    if (d.dbct != null) { var Ap = api(), bs = Ap.batches(); if (bs[d.dbct]) Ap.BCX.batch = d.dbct; Ap.BCX.tab = 'people'; if (location.hash === '#bct') route(); else location.hash = 'bct'; }
+  });
+  document.addEventListener('toggle', function (e) { var k = e.target && e.target.dataset && e.target.dataset.dk; if (k) DASH.open[k] = e.target.open; }, true);
+  var prevRR = rerenderReview;
+  rerenderReview = function () { prevRR(); again(); };
+
+  var css = document.createElement('style');
+  css.textContent = [
+    '.dhead{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:6px 0 10px}',
+    '.dk{display:block;font-size:12px;font-weight:800;letter-spacing:.1em;color:var(--blue)}',
+    '.dtitle{text-align:left;margin:2px 0 0}',
+    '.dacts{display:flex;gap:8px;flex-wrap:wrap}',
+    '.dtabs{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:thin}',
+    '.dtabs .chip{white-space:nowrap}.dtabs .chip.on{background:var(--deep);border-color:var(--deep);color:#fff}.dtabs .chip b{opacity:.7;font-weight:600;margin-left:3px}',
+    '.dgrid{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-items:start}',
+    '.dmenu{flex-direction:row;gap:6px;overflow-x:auto;padding:8px;border-radius:18px}',
+    '.dmenu .dsec,.dmenu .dsep{display:none}',
+    '.dmi{display:flex;align-items:center;gap:10px;border:0;background:none;color:var(--ink);font:inherit;font-weight:700;font-size:14.5px;padding:8px 12px;border-radius:12px;cursor:pointer;white-space:nowrap;text-align:left}',
+    '.dmi em{font-style:normal;margin-left:auto;font-size:12px;font-weight:800;padding:1px 9px;border-radius:999px;background:rgba(255,255,255,.22)}',
+    '.dmi.on{background:var(--deep);color:#fff}',
+    '.dmg{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:var(--ysoft);font-size:13px;font-weight:800;flex:none}',
+    '.dmi.on .dmg{background:rgba(255,255,255,.2)}',
+    '.dkpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(138px,1fr));gap:10px;margin-bottom:14px}',
+    '.dtile{border:1.5px solid var(--line);background:var(--surface);border-radius:16px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;min-height:84px}',
+    '.dtile small{font-size:11px;font-weight:800;letter-spacing:.07em;color:var(--muted,#5b6577)}',
+    '.dtile b{font-size:28px;line-height:1}',
+    '.dvt{margin:0;font-size:22px}',
+    '.dsub{margin:0;font-size:14px;color:var(--muted,#5b6577)}',
+    '.dgroup{margin:10px 0 0;font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--blue)}',
+    '.dlist{border:1.5px solid var(--line);border-radius:16px;background:var(--surface)}',
+    '.dlist>summary{list-style:none;display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer}',
+    '.dlist>summary::-webkit-details-marker{display:none}',
+    '.dlt{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}.dlt small{font-size:13px;color:var(--muted,#5b6577)}',
+    '.dcount{font-weight:800;font-size:13px;padding:2px 10px;border-radius:999px;background:var(--line)}.dcount.on{background:var(--deep);color:#fff}',
+    '.dplus{width:22px;height:22px;position:relative;flex:none}.dplus::before,.dplus::after{content:"";position:absolute;left:4px;right:4px;top:10px;height:2px;border-radius:2px;background:currentColor}.dplus::after{transform:rotate(90deg);transition:transform .15s}.dlist[open] .dplus::after{transform:rotate(0)}',
+    '.drows{border-top:1px solid var(--line);padding:0 8px 6px}',
+    '.drow{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:0;border-top:1px solid var(--line);background:none;padding:11px 6px;cursor:pointer;color:var(--ink);font:inherit}.drow:first-child{border-top:0}',
+    '.dmain{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}.dmain small{color:var(--muted,#5b6577);font-size:13px}',
+    '.dend{display:flex;align-items:center;gap:8px;flex:none}.dwait{font-size:12.5px;font-weight:700;color:var(--muted,#5b6577);white-space:nowrap}',
+    '.dempty{margin:0;padding:4px 14px 14px;font-size:14px;color:var(--muted,#5b6577)}',
+    '@media (min-width:1000px){.dgrid{grid-template-columns:250px minmax(0,1fr)}.dmenu{flex-direction:column;overflow:visible;position:sticky;top:16px;padding:14px}.dmenu .dsec{display:block;font-size:11px;font-weight:800;letter-spacing:.1em;color:var(--muted,#5b6577);margin:4px 8px}.dmenu .dsep{display:block;height:1px;background:var(--line);margin:8px 4px}.dmi{white-space:normal}}'
+  ].join('');
+  document.head.appendChild(css);
+})();
+/* END dash.js */
 /* END app.js */
