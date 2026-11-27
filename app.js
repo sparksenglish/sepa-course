@@ -434,7 +434,7 @@ const coreDone = (tid, p) => coreOf(tid).filter(l => routinePct(l.id, p) === 100
 const openedIn = (tid, o) => topicLeaves(tid).filter(l => (o || PR.o)[l.id]).length;
 function topicDone(tid, p, t){ return Math.round((coreDone(tid, p) + tasksDone(tid, t)) / (coreOf(tid).length + tasksTotal(tid)) * 100); }
 function overallDone(p, t){ const ts = TOPICS.filter(x => !x.soon); const tot = ts.reduce((a, x) => a + coreOf(x.id).length + tasksTotal(x.id), 0); const got = ts.reduce((a, x) => a + coreDone(x.id, p) + tasksDone(x.id, t), 0); return Math.round(got / tot * 100); }
-const freeAccess = () => PG.trainer;
+const freeAccess = () => PG.trainer || !!(window.SEPA && SEPA.me && SEPA.me.preview);
 function topicUnlocked(t){ if (freeAccess() || t.n === 1) return true; const prev = TOPICS.find(x => x.n === t.n - 1); return !!prev && coreDone(prev.id) === coreOf(prev.id).length && tasksDone(prev.id) === tasksTotal(prev.id); }
 function tasksUnlocked(t){ return freeAccess() || coreDone(t.id) === coreOf(t.id).length; }
 const prevUnit = u => { const us = topicOf(u).units, i = us.indexOf(u); return i > 0 ? us[i - 1] : null; };
@@ -3171,12 +3171,13 @@ window.SEPA_START = function (fresh) {
   /* ---------- who sees the bootcamp ---------- */
   function mySched() { var d = data(); if (!d || !S.me || isTrainer()) return null; return d.sched[norm(S.me.batch)] || null; }
   function cachedUnlock() { try { return localStorage.getItem('sepa-bcu-' + (S.me && S.me.uid)) === '1'; } catch (e) { return false; } }
-  function unlocked() { if (PG.bc) return !!PG.bc.unlocked; return cachedUnlock(); }
+  function isPreview() { return !!(S.me && S.me.preview); }
+  function unlocked() { if (isPreview()) return true; if (PG.bc) return !!PG.bc.unlocked; return cachedUnlock(); }
   function applies() { return !!mySched(); }
   function locked() { return applies() && !unlocked(); }
   window.SEPA_bcLocked = locked;
   function dayInfo(d) { var bd = data(); return (bd && bd.days[d]) || { items: [] }; }
-  function dayOpen(sch) { return !sch || !sch.date || jkt().date >= sch.date; }
+  function dayOpen(sch) { return isPreview() || !sch || !sch.date || jkt().date >= sch.date; }
   function hw(d) { PR.bc = PR.bc || {}; return PR.bc[d] || (PR.bc[d] = { a: {} }); }
   function myReview(d) { return (PG.myReviews || {})['bc' + d] || null; }
   function required(d) { return dayInfo(d).items.filter(function (x) { return REQ[x.kind]; }); }
@@ -3474,7 +3475,7 @@ window.SEPA_START = function (fresh) {
     if (!ps.length) return '<div class="empty">No participants in this batch yet. Register them with this batch name in Trainer tools (or the Users tab).</div>';
     var rows = ps.map(function (p) {
       var r = rec(p.uid), att = r.att || {};
-      return '<tr><th scope="row"><b>' + esc(p.name) + '</b><small>' + esc(p.email) + '</small></th>' + DAYS.map(function (d) {
+      return '<tr><th scope="row"><b>' + esc(p.name) + '</b>' + (p.preview ? ' <span class="ctag">Preview</span>' : '') + '<small>' + esc(p.email) + '</small></th>' + DAYS.map(function (d) {
         var cs = cellStatus(p.uid, d);
         return '<td><label class="bcatt"><input type="checkbox" data-bcatt="' + esc(p.uid) + '|' + d + '"' + (att[d] ? ' checked' : '') + '> Attended</label>' +
           (cs.k === 'none' ? '<span class="bccell none">' + esc(cs.label) + '</span>' : '<button class="bccell ' + cs.k + '" data-go="bcr-' + esc(p.uid) + '-' + d + '">' + esc(cs.label) + '</button>') + '</td>';
@@ -3682,18 +3683,56 @@ window.SEPA_START = function (fresh) {
     scrollTo(0, 0);
   };
   // Me page: a Bootcamp row (participants in a bootcamp batch, and trainers)
+  function toReview() {
+    var n = 0;
+    if (BCX.roster) BCX.roster.people.forEach(function (p) { DAYS.forEach(function (d) { if (cellStatus(p.uid, d).k === 'new') n++; }); });
+    return n;
+  }
+  // trainers: the Me page leads with the trainer tools; their own practice is folded away at the bottom
+  function trainerMe(h) {
+    var a = h.indexOf('<button class="cont" data-go="trainer">');
+    if (a < 0) return h;
+    var z = h.indexOf('</button>', a) + 9, hp = h.lastIndexOf('<div class="card"><button class="linkrow" data-go="help">');
+    var head = h.slice(0, a), rest = h.slice(z, hp > z ? hp : h.length), help = hp > z ? h.slice(hp) : '';
+    var n = toReview(), people = (PG.cohort || []).length, admin = !!(S.me && S.me.admin);
+    var tools = '<h2 class="h2 bctoolsh">Trainer tools</h2><div class="bctools">' +
+      '<button class="tcard" style="--u:var(--blue)" data-go="trainer"><span class="num">PARTICIPANTS</span><h3>Scoring and progress</h3><p>' + people + ' participant' + (people === 1 ? '' : 's') + ' · score writing and speaking, add people</p></button>' +
+      '<button class="tcard bccard" data-go="bct" data-bctab="people"><span class="num">BOOTCAMP</span><h3>Batches and homework</h3><p>' + (n ? n + ' to review · ' : '') + 'attendance, reviews and unlocking the course</p></button>' +
+      '<button class="tcard" style="--u:var(--green)" data-go="content"><span class="num">COURSE CONTENT</span><h3>Edit the course</h3><p>Topics, lessons, quizzes, warm-ups, rubrics and bootcamp</p></button>' +
+      (admin ? '<button class="tcard" style="--u:#5B4A9E" data-bctrain="1"><span class="num">ADMIN</span><h3>Add a trainer</h3><p>Register a new trainer or participant</p></button>' : '') + '</div>';
+    return head + tools + '<details class="essbox bcmine"><summary>My own practice</summary><div class="bcminebody">' + rest + '</div></details>' + help;
+  }
   var prevMe = mePage;
   mePage = function () {
     var h = prevMe();
-    if (isTrainer()) return h + '<div class="card"><button class="linkrow" data-go="bct"><span>Bootcamp: batches, homework and unlocking</span>' + I.arrow + '</button></div>';
+    if (isTrainer()) return trainerMe(h);
     if (applies()) return '<div class="card"><button class="linkrow" data-go="bootcamp"><span>Teacher Bootcamp: homework and feedback</span>' + I.arrow + '</button></div>' + h;
     return h;
   };
+  // Trainer tools page: Bootcamp sits beside Course content
+  var prevTL = trainerList;
+  trainerList = function () {
+    var h = prevTL(), a = h.indexOf('<button class="nextbox" data-go="content">');
+    if (a < 0) return h;
+    var z = h.indexOf('</button>', a) + 9, n = toReview();
+    return h.slice(0, z) + '<button class="nextbox" data-go="bct" data-bctab="people"><span><b>Bootcamp' + (n ? ' · ' + n + ' to review' : '') + '</b><small>Batches, attendance, homework reviews and unlocking the course</small></span>' + I.arrow + '</button>' + h.slice(z);
+  };
+  // Course content page: a way into the Bootcamp content editor
+  var prevCP = contentPage;
+  contentPage = function () {
+    var h = prevCP(), a = h.indexOf('<section class="card cebox">');
+    if (!PG.trainer || a < 0) return h;
+    return h.slice(0, a) + '<button class="nextbox" data-go="bct" data-bctab="content"><span><b>Bootcamp content</b><small>The 3 days: slides, quizzes, homework and the schedule</small></span>' + I.arrow + '</button>' + h.slice(a);
+  };
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest('[data-bctab]'); if (t) BCX.tab = t.dataset.bctab;
+    var r = e.target.closest('[data-bctrain]');
+    if (r) { PG.regOpen = true; PG.regDraft = Object.assign({}, PG.regDraft, { role: 'trainer' }); if (location.hash === '#trainer') rerender(); else location.hash = 'trainer'; setTimeout(function () { var el = document.getElementById('regsec'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 450); }
+  });
   // Review page (trainers): Bootcamp first
   var prevReview = reviewPage;
   reviewPage = function () {
-    var h = prevReview(), n = 0;
-    if (BCX.roster) BCX.roster.people.forEach(function (p) { DAYS.forEach(function (d) { if (cellStatus(p.uid, d).k === 'new') n++; }); });
+    var h = prevReview(), n = toReview();
     var box = '<button class="nextbox" data-go="bct"><span><b>Bootcamp' + (n ? ' · ' + n + ' to review' : '') + '</b><small>Attendance, homework reviews and unlocking the course</small></span>' + I.arrow + '</button>';
     return PG.trainer ? h.replace('</header>', '</header>' + box) : h;
   };
@@ -3845,6 +3884,15 @@ window.SEPA_START = function (fresh) {
     '.bcpick input:checked+span{background:var(--green);border-color:var(--green);color:#fff}',
     '.bcpick input:focus-visible+span{outline:3px solid var(--green);outline-offset:2px}',
     '.bchome{margin-bottom:4px}',
+    '.bctoolsh{margin:18px 0 8px}',
+    '.bctools{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;margin-bottom:14px}',
+    '.bctools .tcard{min-height:132px;justify-content:flex-end}',
+    '.bctools .tcard h3,.bctools .tcard.bccard h3{font-size:22px}',
+    '.bctools .tcard p{font-size:14px;opacity:.92}',
+    '@media (min-width:760px){.bctools{grid-template-columns:repeat(2,minmax(0,1fr))}}',
+    '@media (min-width:1000px){.bctools{grid-template-columns:repeat(3,minmax(0,1fr))}}',
+    '.bcmine{margin:12px 0}',
+    '.bcminebody{display:flex;flex-direction:column;gap:14px;padding:4px 0 14px}',
     '.tcard.bccard{width:100%;background:linear-gradient(135deg,#0B2A6F 0%,#1B4C97 48%,#5E9E2F 100%);transition:transform .15s,box-shadow .3s}',
     '.tcard.bccard .tbar .bar i{background:#FCD535}',
     '.tcard.bccard.flash{box-shadow:0 0 0 4px rgba(94,158,47,.55)}',
