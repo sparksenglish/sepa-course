@@ -3,7 +3,7 @@
    - Pages, scripts, styles, manifest: network first (always fresh when online), the cached copy when offline.
    - Images, sound, fonts: cache first; Range requests are answered from the cache so audio can seek offline.
    - Calls to the Apps Script API (POST, another site) are never touched. */
-const VERSION = '5a88f1e11a';
+const VERSION = 'd84e6cb29d';
 const SHELL = 'sep-shell-' + VERSION;
 const STATIC = 'sep-static-v1';
 const CORE = ['./', './index.html', './app.js', './manifest.webmanifest', './icon-192.png', './icon-128.png'];

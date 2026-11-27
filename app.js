@@ -3657,7 +3657,7 @@ window.SEPA_START = function (fresh) {
   });
 
   /* ---------- routes ---------- */
-  var ALLOWED_LOCKED = /^(bootcamp|bc[123]|me|help|notifs|saved)$/;
+  var ALLOWED_LOCKED = /^(home|bootcamp|bc[123]|me|help|notifs|saved)$/;
   var prevRoute = route;
   route = function () {
     if (!SESSION) return prevRoute();
@@ -3665,9 +3665,15 @@ window.SEPA_START = function (fresh) {
     if (BCX.rec && BCX.rec.state === 'live' && h !== current) { try { BCX.rec.recorder.stop(); } catch (e) {} stopTracks(); BCX.rec = null; }
     if (h === 'bct') { page = 'review'; html = trainerHTML(); }
     else if (/^bcr-[\w-]+-[123]$/.test(h)) { var m = /^bcr-([\w-]+)-([123])$/.exec(h); page = 'review'; html = reviewHTML(m[1], +m[2]); }
-    else if (applies() && (h === 'bootcamp' || (locked() && !ALLOWED_LOCKED.test(h)))) { page = 'home'; html = overviewHTML(); h = 'bootcamp'; }
+    else if (locked() && !ALLOWED_LOCKED.test(h)) { BCX.focusCard = true; location.replace('#home'); return; }
+    else if (applies() && h === 'bootcamp') { page = 'home'; html = overviewHTML(); }
     else if (applies() && /^bc[123]$/.test(h)) { page = 'home'; html = dayHTML(+h.slice(2)); }
-    if (html == null) return prevRoute();
+    document.body.classList.toggle('bc-locked', locked());
+    if (html == null) {
+      prevRoute();
+      if (h === 'home' && BCX.focusCard) { BCX.focusCard = false; var wc = document.getElementById('bcwelcome'); if (wc) { wc.scrollIntoView({ block: 'start', behavior: 'smooth' }); wc.classList.add('flash'); setTimeout(function () { wc.classList.remove('flash'); }, 1200); } }
+      return;
+    }
     current = h;
     try { speechSynthesis.cancel(); } catch (e) {}
     app.innerHTML = html;
@@ -3691,15 +3697,40 @@ window.SEPA_START = function (fresh) {
     var box = '<button class="nextbox" data-go="bct"><span><b>Bootcamp' + (n ? ' · ' + n + ' to review' : '') + '</b><small>Attendance, homework reviews and unlocking the course</small></span>' + I.arrow + '</button>';
     return PG.trainer ? h.replace('</header>', '</header>' + box) : h;
   };
-  // Home (course open): a reminder while bootcamp homework is still open
+  // Home: the welcome card under the SEPA COURSE title (while the course is locked),
+  // then a one-line link to homework and feedback until all 3 days are reviewed
+  function liveNow(s) {
+    if (!s || !s.date || !s.link) return false;
+    var t = jkt(), st = toMin(s.start), en = toMin(s.end);
+    return t.date === s.date && (st == null || t.min >= st - 15) && (en == null || t.min <= en);
+  }
+  function welcomeHTML() {
+    var sch = mySched() || { days: {} };
+    var days = DAYS.map(function (d) {
+      var di = dayInfo(d), s = sch.days[d], st = dayStatus(d, (PR.bc || {})[d] || {}, myReview(d), s);
+      return '<div class="bcwday st-' + st.k + '"><span class="bcnum">Day ' + d + '</span><b>' + esc(di.t || 'Day ' + d) + '</b>' +
+        '<small>' + ICAL + ' ' + (s && s.date ? esc(dayLabel(s.date)) + (timeLabel(s) ? ' · ' + esc(timeLabel(s)) : '') : 'Date to be announced') + '</small>' +
+        '<span class="bcst">' + esc(st.label) + '</span>' +
+        '<span class="bcwacts">' + (liveNow(s) ? '<a class="btn primary sm" href="' + esc(s.link) + '" target="_blank" rel="noopener">' + IVID + ' Join now</a>' : '') +
+        '<button class="btn sm" data-go="bc' + d + '">Open Day ' + d + '</button></span></div>';
+    }).join('');
+    return '<section class="card bcwelcome" id="bcwelcome" aria-label="Bootcamp"><div class="bcwhead">' + (window.SEPA_ICON ? '<img alt="" src="' + window.SEPA_ICON + '">' : '') +
+      '<div><h2>Welcome to SPARKS English Bootcamp ' + esc(sch.name || '') + '</h2><p>3 online days. Join each live session and hand in the homework. Your self-paced course opens after the bootcamp.</p></div></div>' +
+      '<div class="bcwdays">' + days + '</div>' +
+      '<div class="acts"><button class="btn primary" data-go="bootcamp">Open Bootcamp</button></div></section>' +
+      '<p class="bclocknote">' + LOCK + ' Your course opens after your bootcamp</p>';
+  }
   var prevHome = homePage;
   homePage = function () {
     var h = prevHome();
-    if (!applies() || locked()) return h;
-    var open = DAYS.filter(function (d) { var st = dayStatus(d, (PR.bc || {})[d] || {}, myReview(d), (mySched() || { days: {} }).days[d]); return st.k === 'todo' || st.k === 'revise'; });
-    if (!open.length) return h;
+    if (!applies()) return h;
+    var box;
+    if (locked()) box = welcomeHTML();
+    else {
+      if (DAYS.every(function (d) { var rv = myReview(d); return rv && rv.res !== 'revise'; })) return h;
+      box = '<button class="nextbox bchome" data-go="bootcamp"><span><b>Bootcamp</b><small>See your homework and feedback</small></span>' + I.arrow + '</button>';
+    }
     var i = h.indexOf('<section');
-    var box = '<button class="nextbox bchome" data-go="bootcamp"><span><b>Bootcamp homework to finish</b><small>Day ' + open.join(', Day ') + '</small></span>' + I.arrow + '</button>';
     return i < 0 ? h + box : h.slice(0, i) + box + h.slice(i);
   };
 
@@ -3815,7 +3846,25 @@ window.SEPA_START = function (fresh) {
     '.bcpick span{display:grid;place-items:center;height:40px;border:1.5px solid var(--line);border-radius:10px;font-weight:800;cursor:pointer}',
     '.bcpick input:checked+span{background:var(--green);border-color:var(--green);color:#fff}',
     '.bcpick input:focus-visible+span{outline:3px solid var(--green);outline-offset:2px}',
-    '.bchome{margin-bottom:14px}',
+    '.bchome{margin-bottom:4px}',
+    '.bcwelcome{display:flex;flex-direction:column;gap:14px;border:1.5px solid color-mix(in srgb,var(--green) 40%,var(--line));background:linear-gradient(135deg,color-mix(in srgb,var(--green) 9%,var(--card,#fff)) 0%,var(--card,#fff) 70%);transition:box-shadow .3s}',
+    '.bcwelcome.flash{box-shadow:0 0 0 4px color-mix(in srgb,var(--green) 45%,transparent)}',
+    '.bcwhead{display:flex;gap:14px;align-items:flex-start}',
+    '.bcwhead img{width:44px;height:44px;flex:none}',
+    '.bcwhead h2{margin:0;font-size:22px;line-height:1.25}',
+    '.bcwhead p{margin:6px 0 0;color:var(--muted)}',
+    '.bcwdays{display:grid;gap:10px}',
+    '@media (min-width:760px){.bcwdays{grid-template-columns:repeat(3,minmax(0,1fr))}}',
+    '.bcwday{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:var(--card,#fff)}',
+    '.bcwday b{line-height:1.3}',
+    '.bcwday small{display:flex;gap:6px;align-items:center;color:var(--muted);font-weight:600}',
+    '.bcwday .bcst{margin-top:4px}',
+    '.bcwacts{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}',
+    '.bcwelcome .acts{margin:0}',
+    '.bclocknote{display:none;align-items:center;gap:8px;margin:0;font-weight:700;color:var(--muted)}',
+    '.bclocknote svg{width:18px;height:18px}',
+    'body.bc-locked .bclocknote{display:flex}',
+    'body.bc-locked #app > section:not(.bcwelcome){opacity:.5;filter:grayscale(.35)}',
     '.bcwho{display:flex;justify-content:space-between;align-items:center;gap:12px}',
     '.bcwho>div{display:flex;flex-direction:column;gap:2px;min-width:0}',
     '.bcwho small{color:var(--muted);font-weight:600;overflow-wrap:anywhere}',
