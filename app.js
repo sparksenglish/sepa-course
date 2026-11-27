@@ -329,7 +329,7 @@ let level = load("pce-level-v", "sk");
 if (!LEVELS.some(l => l.id === level)) level = "sk";
 let stars = load("pce-stars2", []);
 let lastSeen = load("sepa-last", null);
-const PR = Object.assign({p:{}, t:{}, o:{}, q:{}, sub:{}, tw:{}, nr:[], sp:{}, dr:{}, wu:{}, start:null, goal:10}, load("sepa-practice", {}));
+const PR = Object.assign({p:{}, t:{}, o:{}, q:{}, sub:{}, tw:{}, nr:[], sp:{}, dr:{}, wu:{}, bc:{}, start:null, goal:10}, load("sepa-practice", {}));
 const FILTER = {topic1:"u1", topic2:"all"};
 const app = document.getElementById("app");
 function esc(s){ return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
@@ -477,7 +477,7 @@ async function flushPR(){
   if (!PG.db || !PG.me) { prDirty = false; return; }
   if (prWriting) { prTimer = setTimeout(flushPR, 600); return; }
   prWriting = true; prDirty = false;
-  try { await PG.db.doc("progress/" + PG.me).set({p:PR.p, t:PR.t, o:PR.o, q:PR.q, sub:PR.sub, tw:PR.tw, nr:PR.nr || [], sp:PR.sp || {}, dr:PR.dr || {}, wu:PR.wu || {}, start:PR.start, goal:PR.goal, updatedAt:new Date().toISOString()}); PG.saveFail = false; }
+  try { await PG.db.doc("progress/" + PG.me).set({p:PR.p, t:PR.t, o:PR.o, q:PR.q, sub:PR.sub, tw:PR.tw, nr:PR.nr || [], sp:PR.sp || {}, dr:PR.dr || {}, wu:PR.wu || {}, bc:PR.bc || {}, start:PR.start, goal:PR.goal, updatedAt:new Date().toISOString()}); PG.saveFail = false; }
   catch(e){ PG.saveFail = true; prDirty = true; clearTimeout(prTimer); prTimer = setTimeout(() => { if (navigator.onLine !== false) flushPR(); }, 60000); }
   prWriting = false;
 }
@@ -1269,7 +1269,9 @@ function notifItems(){
     reviewItems().filter(x => !isReviewed(x.s, x.rv)).forEach(x => out.push({id:`sub:${x.pid}:${x.key}:${x.s.at}`, at:x.s.at, ic:x.key.split("_")[1], pid:x.pid,
       t:`submitted ${keyLabel(x.key)}${x.rv ? " again" : ""}. Ready to score.`, go:"rvitem", rv:rvId(x)}));
   } else {
-    Object.entries(PG.myReviews || {}).forEach(([key, rv]) => { if (!rv || !rv.at) return; const [uid, k] = key.split("_");
+    Object.entries(PG.myReviews || {}).forEach(([key, rv]) => { if (!rv || !rv.at) return;
+      if (rv.bc) { out.push({id:`rv:${key}:${rv.atIso || rv.at}`, at:rv.at, ic:"chart", t:`Your trainer reviewed your Bootcamp Day ${rv.bc} homework${rv.res === "revise" ? ": please update it" : ""}. Open it to read the feedback.`, go:`bc${rv.bc}`}); return; }
+      const [uid, k] = key.split("_");
       out.push({id:`rv:${key}:${rv.at}`, at:rv.at, ic:k, t:`Your trainer scored your ${keyLabel(key)} task${rv.band != null ? `: score ${fmtS(rv.band)}` : ""}. Open it to read the feedback.`, go:`${uid}-${k}`}); });
     const cp = (PG.mine && PG.mine.cp) || {};
     CPS.forEach(c => { const e = cp[c.k]; if (e && entryBand(e) != null) out.push({id:`cp:${c.k}:${e.date || ""}`, at:e.date || "", ic:"chart", t:`Your ${lc(c.t)} results are ready.`, go:"me"}); });
@@ -1755,7 +1757,7 @@ async function boot(){
     if (prDirty || prWriting) return;
     if (s.exists) {
       const d = JSON.parse(JSON.stringify(s.data() || {}));
-      PR.p = d.p || {}; PR.t = d.t || {}; PR.o = d.o || {}; PR.q = d.q || {}; PR.sub = d.sub || {}; PR.tw = d.tw || {}; PR.nr = d.nr || []; PR.sp = d.sp || {}; PR.dr = d.dr || {}; PR.wu = d.wu || {}; PR.start = d.start || PR.start; PR.goal = d.goal || PR.goal; save(prKey(), PR);
+      PR.p = d.p || {}; PR.t = d.t || {}; PR.o = d.o || {}; PR.q = d.q || {}; PR.sub = d.sub || {}; PR.tw = d.tw || {}; PR.nr = d.nr || []; PR.sp = d.sp || {}; PR.dr = d.dr || {}; PR.wu = d.wu || {}; PR.bc = d.bc || {}; PR.start = d.start || PR.start; PR.goal = d.goal || PR.goal; save(prKey(), PR);
       if (!firstPR) refreshProgress();
     } else if (Object.keys(PR.p).length || Object.keys(PR.t).length || Object.keys(PR.o).length || Object.keys(PR.q).length) persist();
     if (firstPR) { firstPR = false; refreshProgress(); }
@@ -1765,8 +1767,10 @@ async function boot(){
     sub(db.collection("progress"), qs => { const m = {}; qs.docs.forEach(x => m[x.id] = x.data() || {}); PG.practice = m; if (current === "trainer") refreshProgress(); else rerenderReview(); });
     sub(db.doc("trainers/" + PG.me), s => { PG.myContact = s.exists ? s.data() : null; if (current === "trainer" && !PG.sel && !PG.trDraft) renderProgress(); });
     sub(db.collection("reviews"), qs => { const m = {}; qs.docs.forEach(x => m[x.id] = JSON.parse(JSON.stringify(x.data() || {}))); PG.reviews = m; rerenderReview(); });
+    sub(db.collection("bootcamp"), qs => { const m = {}; qs.docs.forEach(x => m[x.id] = JSON.parse(JSON.stringify(x.data() || {}))); PG.bcAll = m; if (window.SEPA_bcChanged) SEPA_bcChanged(); });
   } else {
-    sub(db.doc("reviews/" + PG.me), s => { PG.myReviews = s.exists ? s.data() : {}; updateBell(); if (/^u\d+-(speak|write)$/.test(current || "") || current === "me") { const y = scrollY; route(); scrollTo(0, y); } });
+    sub(db.doc("reviews/" + PG.me), s => { PG.myReviews = s.exists ? s.data() : {}; updateBell(); if (/^u\d+-(speak|write)$|^bc[123]$|^bootcamp$/.test(current || "") || current === "me") { if (!(document.activeElement && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName))) { const y = scrollY; route(); scrollTo(0, y); } } });
+    sub(db.doc("bootcamp/" + PG.me), s => { PG.bc = s.exists ? JSON.parse(JSON.stringify(s.data() || {})) : {}; if (window.SEPA_bcChanged) SEPA_bcChanged(); });
     sub(db.doc("scores/" + PG.me), s => { PG.mine = s.exists ? s.data() : null; PG.state = "ready";
       const tid = PG.mine && PG.mine.trainer;
       if (tid && tid !== PG.trId) { PG.trId = tid; sub(db.doc("trainers/" + tid), t => { PG.trInfo = t.exists ? t.data() : null; if (current === "me") { const y = scrollY; route(); scrollTo(0, y); } }); }
@@ -1839,7 +1843,7 @@ function twistHTML(key){
 const SESSION_KEY = "sepa-session";
 let SESSION = load(SESSION_KEY, null);
 const prKey = () => "sepa-practice:" + ((window.SEPA && SEPA.me && SEPA.me.uid) || "anon");
-function resetPR(){ Object.keys(PR).forEach(k => delete PR[k]); Object.assign(PR, {p:{}, t:{}, o:{}, q:{}, sub:{}, tw:{}, nr:[], sp:{}, dr:{}, wu:{}, start:null, goal:10}, load(prKey(), {})); }
+function resetPR(){ Object.keys(PR).forEach(k => delete PR[k]); Object.assign(PR, {p:{}, t:{}, o:{}, q:{}, sub:{}, tw:{}, nr:[], sp:{}, dr:{}, wu:{}, bc:{}, start:null, goal:10}, load(prKey(), {})); }
 function startApp(fresh){
   if (!SESSION) return showSignIn();
   document.body.classList.remove("signedout");
@@ -1852,7 +1856,7 @@ async function signOut(){
   try { await flushNow(); } catch(e){}
   BOOTGEN++;
   PG.unsubs.forEach(u => { try { u && u(); } catch(e){} });
-  Object.assign(PG, {content:{}, names:{}, myContact:null, trDraft:null, trId:null, trInfo:null, unsubs:[], reviews:{}, myReviews:{}, email:"", name:"", state:"loading", db:null, user:null, me:null, trainer:false, mine:null, cohort:[], practice:{}, sel:null, cpSel:"baseline", q:"", hits:[], msg:"", saveFail:false});
+  Object.assign(PG, {bc:null, bcAll:null, content:{}, names:{}, myContact:null, trDraft:null, trId:null, trInfo:null, unsubs:[], reviews:{}, myReviews:{}, email:"", name:"", state:"loading", db:null, user:null, me:null, trainer:false, mine:null, cohort:[], practice:{}, sel:null, cpSel:"baseline", q:"", hits:[], msg:"", saveFail:false});
   SESSION = null; try { localStorage.removeItem(SESSION_KEY); } catch(e){}
   setNav(false); AUTH = {step:"signin"};
   history.replaceState(null, "", "#home");
@@ -2086,11 +2090,12 @@ function sepaApplyContent(map) {
   map = map || {};
   // warm-ups added by trainers travel with the edits
   try { var w = map.WARM; WARM = Array.isArray(w) ? w : typeof w === 'string' && w ? JSON.parse(w) : []; } catch (e) { WARM = []; }
+  window.SEPA_BOOTDATA = map.BOOT && typeof map.BOOT === 'object' ? map.BOOT : null;
   Object.keys(SEPA_APPLIED).forEach(function (k) {
     if (!(k in map)) { sepaSet(k, SEPA_APPLIED[k]); delete SEPA_APPLIED[k]; }
   });
   Object.keys(map).forEach(function (k) {
-    if (k === 'WARM') return;
+    if (k === 'WARM' || k === 'BOOT') return;
     if (!(k in SEPA_APPLIED)) { var o = sepaGet(k); if (o === undefined) return; SEPA_APPLIED[k] = o; }
     sepaSet(k, map[k]);
   });
@@ -2674,7 +2679,7 @@ document.addEventListener('click', function (e) {
     if (!node || node.nodeType !== 1) return;
     var btns = node.matches && node.matches('[data-src]') ? [node] : node.querySelectorAll ? node.querySelectorAll('[data-src]') : [];
     Array.prototype.forEach.call(btns, function (b) { if (isFileRef(b.dataset.src)) { if (bio) bio.observe(b); else prefetch(b.dataset.src); } });
-    var list = node.tagName === 'AUDIO' ? [node] : node.querySelectorAll ? node.querySelectorAll('audio[src]') : [];
+    var list = node.tagName === 'AUDIO' || node.tagName === 'VIDEO' ? [node] : node.querySelectorAll ? node.querySelectorAll('audio[src],video[src]') : [];
     Array.prototype.forEach.call(list, function (el) {
       var src = el.getAttribute('src');
       if (!src || !(looksLocal(src) || isFileRef(src))) return;
@@ -3134,4 +3139,693 @@ window.SEPA_START = function (fresh) {
   document.head.appendChild(css);
 })();
 /* END bridge.js */
+/* ===== bootcamp.js ===== */
+/* =================== Bootcamp (version 2.1) ===================
+ * The 3-day online Teacher Bootcamp before the self-paced course.
+ * Content and schedule come from the Sheet ("Content: Bootcamp", "Content: Bootcamp schedule") via the content map (BOOT).
+ * Participant answers: PR.bc[day] = {a:{itemId: answer}, at, late}  (progress record)
+ * Trainer data:        bootcamp/<uid> = {att:{1:true,...}, unlocked:'yyyy-mm-dd', by}   reviews/<uid>.bc1..bc3
+ * Pages: #bootcamp, #bc1..#bc3 (participants) · #bct (trainers: batch, schedule, content) · #bcr-<uid>-<day> (review)
+ */
+(function () {
+  var S = window.SEPA;
+  var BCX = { roster: null, rosterAt: 0, batch: '', tab: 'people', unlock: null, edit: null, editDay: 1, msg: '', busy: false, rows: null, sched: null, rec: null };
+  var DAYS = [1, 2, 3];
+  var norm = function (s) { return String(s == null ? '' : s).trim().toLowerCase().replace(/\s+/g, ' '); };
+  var data = function () { return window.SEPA_BOOTDATA || null; };
+  var isTrainer = function () { return !!(S.me && S.me.role === 'trainer'); };
+  var REQ = { Quiz: 1, Written: 1, Video: 1, Voice: 1, Upload: 1 };
+  var ICAL = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>';
+  var IVID = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="M16 10l6-3v10l-6-3z"/></svg>';
+  var ILINK = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a5 5 0 007 0l3-3a5 5 0 00-7-7l-1 1M14 10a5 5 0 00-7 0l-3 3a5 5 0 007 7l1-1"/></svg>';
+
+  /* ---------- time (schedule times are Jakarta time) ---------- */
+  function jkt() { var d = new Date(Date.now() + 7 * 3600e3); return { date: d.toISOString().slice(0, 10), min: d.getUTCHours() * 60 + d.getUTCMinutes() }; }
+  function toMin(t) { var m = /^(\d{2}):(\d{2})$/.exec(t || ''); return m ? +m[1] * 60 + +m[2] : null; }
+  function dayLabel(date, long) {
+    if (!date) return '';
+    try { return new Date(date + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: long ? 'long' : 'short', timeZone: 'UTC' }); } catch (e) { return date; }
+  }
+  function timeLabel(s) { return s && (s.start || s.end) ? (s.start || '') + (s.end ? '–' + s.end : '') : ''; }
+
+  /* ---------- who sees the bootcamp ---------- */
+  function mySched() { var d = data(); if (!d || !S.me || isTrainer()) return null; return d.sched[norm(S.me.batch)] || null; }
+  function cachedUnlock() { try { return localStorage.getItem('sepa-bcu-' + (S.me && S.me.uid)) === '1'; } catch (e) { return false; } }
+  function unlocked() { if (PG.bc) return !!PG.bc.unlocked; return cachedUnlock(); }
+  function applies() { return !!mySched(); }
+  function locked() { return applies() && !unlocked(); }
+  window.SEPA_bcLocked = locked;
+  function dayInfo(d) { var bd = data(); return (bd && bd.days[d]) || { items: [] }; }
+  function dayOpen(sch) { return !sch || !sch.date || jkt().date >= sch.date; }
+  function hw(d) { PR.bc = PR.bc || {}; return PR.bc[d] || (PR.bc[d] = { a: {} }); }
+  function myReview(d) { return (PG.myReviews || {})['bc' + d] || null; }
+  function required(d) { return dayInfo(d).items.filter(function (x) { return REQ[x.kind]; }); }
+
+  function itemDone(it, a) {
+    var v = a[it.id];
+    if (it.kind === 'Quiz') return v != null;
+    if (it.kind === 'Written') return Array.isArray(v) && it.lines.every(function (_, i) { return String(v[i] || '').trim(); });
+    if (it.kind === 'Video' || it.kind === 'Voice') return !!(v && v.ref);
+    if (it.kind === 'Upload') return !!(v && (v.file || v.link));
+    return true;
+  }
+  function quizItems(d) { return dayInfo(d).items.filter(function (x) { return x.kind === 'Quiz'; }); }
+  function quizScore(d, a) { var q = quizItems(d); return { ok: q.filter(function (x) { return a[x.id] === 0; }).length, n: q.length }; }
+  function resultLabel(rv) {
+    if (!rv) return '';
+    if (rv.res === 'meets') return 'Meets expectations';
+    if (rv.res === 'revise') return 'Needs revision';
+    return rv.total + ' / ' + rv.max;
+  }
+  // status of one day for a participant: {key, label}
+  function dayStatus(d, h, rv, sch) {
+    if (rv && rv.res === 'revise' && !(h.at && h.at > rv.atIso)) return { k: 'revise', label: 'Needs revision' };
+    if (rv) return { k: 'done', label: resultLabel(rv) };
+    if (h && h.at) return { k: 'in', label: 'Handed in' + (h.late ? ' · Late' : '') };
+    if (!dayOpen(sch)) return { k: 'soon', label: 'Opens ' + dayLabel(sch.date) };
+    return { k: 'todo', label: 'Homework to do' };
+  }
+
+  /* ---------- participant: overview ---------- */
+  function overviewHTML() {
+    var sch = mySched() || { days: {} }, lk = locked();
+    var cards = DAYS.map(function (d) {
+      var di = dayInfo(d), s = sch.days[d], h = (PR.bc || {})[d] || {}, st = dayStatus(d, h, myReview(d), s);
+      return '<button class="card bcday-card st-' + st.k + '" data-go="bc' + d + '"><span class="bcnum">Day ' + d + '</span>' +
+        '<b>' + esc(di.t || 'Day ' + d) + '</b>' +
+        '<small>' + ICAL + ' ' + (s && s.date ? esc(dayLabel(s.date, true)) + (timeLabel(s) ? ' · ' + esc(timeLabel(s)) : '') : 'Date to be announced') + '</small>' +
+        '<span class="bcst">' + esc(st.label) + '</span></button>';
+    }).join('');
+    return '<h1 class="title">Teacher Bootcamp</h1><p class="sub" style="text-align:center;margin-top:-6px">' + esc((sch.name || '') + ' · 3 online days') + '</p>' +
+      (lk ? '<div class="card bclock">' + LOCK + '<div><b>The self-paced course opens after your bootcamp</b><p>Join the 3 live sessions and hand in each day\'s homework. Your trainer unlocks the course when the bootcamp ends.</p></div></div>' :
+        '<div class="card bclock open">' + I.check + '<div><b>Your course is open</b><p>You can still look back at your bootcamp homework and feedback here.</p><button class="btn sm" data-go="home">Go to the course</button></div></div>') +
+      '<div class="bcgrid">' + cards + '</div>';
+  }
+
+  /* ---------- participant: one day ---------- */
+  function liveHTML(s) {
+    if (!s || !s.date) return '<p class="lead" style="margin:0">The date and the live session link will appear here.</p>';
+    var t = jkt(), st = toMin(s.start), en = toMin(s.end), when = '<p class="bcwhen">' + ICAL + '<span><b>' + esc(dayLabel(s.date, true)) + '</b>' + (timeLabel(s) ? '<br>' + esc(timeLabel(s)) + ' WIB' : '') + '</span></p>';
+    var btn;
+    if (!s.link) btn = '<p class="hiddennote" style="font-style:normal;margin:0">Your trainer will add the live session link.</p>';
+    else if (t.date < s.date || (t.date === s.date && st != null && t.min < st - 15)) btn = '<button class="btn" disabled>' + IVID + ' Join opens ' + (t.date === s.date && st != null ? 'at ' + esc(('0' + Math.floor((st - 15) / 60)).slice(-2) + ':' + ('0' + ((st - 15) % 60)).slice(-2)) : 'on ' + esc(dayLabel(s.date))) + '</button>';
+    else if (t.date > s.date || (en != null && t.min > en)) btn = '<p class="hiddennote" style="font-style:normal;margin:0">This live session has ended.</p>';
+    else btn = '<a class="btn primary" href="' + esc(s.link) + '" target="_blank" rel="noopener">' + IVID + ' Join the live session</a>';
+    return when + btn;
+  }
+  function textHTML(x) {
+    var out = '', list = [];
+    String(x || '').split('\n').forEach(function (line) {
+      if (/^\s*-\s+/.test(line)) { list.push('<li>' + esc(line.replace(/^\s*-\s+/, '')) + '</li>'); return; }
+      if (list.length) { out += '<ul class="bclist">' + list.join('') + '</ul>'; list = []; }
+      if (line.trim()) out += '<p>' + esc(line) + '</p>';
+    });
+    if (list.length) out += '<ul class="bclist">' + list.join('') + '</ul>';
+    return '<div class="prose">' + out + '</div>';
+  }
+  function copyLink(u) { var m = /docs\.google\.com\/(spreadsheets|document|presentation)\/d\/([-\w]{20,})/.exec(u || ''); return m ? 'https://docs.google.com/' + m[1] + '/d/' + m[2] + '/copy' : u; }
+  function quizHTML(d, items, a, ro) {
+    var res = BCX.quizShow && BCX.quizShow[d];
+    var sc = quizScore(d, a), answered = items.every(function (x) { return a[x.id] != null; });
+    var qs = items.map(function (it, qi) {
+      var order = shuffleIdx(it.lines.length, (S.me.uid || '') + it.id), chosen = a[it.id];
+      var show = answered && (res || ro);
+      return '<fieldset class="bcq' + (show ? (chosen === 0 ? ' ok' : ' no') : '') + '"><legend><span>' + (qi + 1) + '</span>' + esc(it.t) + '</legend>' +
+        order.map(function (oi) {
+          return '<label class="bcopt' + (show && oi === 0 ? ' right' : '') + (show && chosen === oi && oi !== 0 ? ' wrong' : '') + '"><input type="radio" name="q-' + esc(it.id) + '" value="' + oi + '" data-bcq="' + d + '|' + esc(it.id) + '"' + (chosen === oi ? ' checked' : '') + (ro ? ' disabled' : '') + '> <span>' + esc(it.lines[oi]) + '</span></label>';
+        }).join('') +
+        (show && it.x ? '<p class="bcexp">' + (chosen === 0 ? I.check + ' ' : '') + esc(it.x) + '</p>' : '') + '</fieldset>';
+    }).join('');
+    var foot = ro ? '<p class="bcscore">Score: ' + sc.ok + ' / ' + sc.n + '</p>' :
+      (answered && res ? '<div class="acts" style="align-items:center"><p class="bcscore">Your score: ' + sc.ok + ' / ' + sc.n + '</p><button class="btn sm" data-bcretry="' + d + '">Try again</button></div>' :
+        '<div class="acts"><button class="btn primary" data-bccheck="' + d + '">Check my answers</button></div>');
+    return '<section class="card bcitem" id="bci-quiz-' + d + '"><h3>Check your understanding</h3><p class="lead" style="margin:0">' + items.length + ' questions · you can try again</p>' + qs + foot + '</section>';
+  }
+  function mediaPlayer(kind, ref) {
+    if (!ref) return '';
+    return kind === 'Video' ? '<video controls playsinline preload="none" src="' + esc(ref) + '" class="bcvideo"></video>' : '<audio controls preload="none" src="' + esc(ref) + '"></audio>';
+  }
+  function itemHTML(d, it, a, ro) {
+    var v = a[it.id], head = '<h3>' + esc(it.t) + (REQ[it.kind] ? '' : ' <small class="bcopt-tag">optional</small>') + '</h3>' + (it.x ? textHTML(it.x) : '');
+    if (it.kind === 'Info') return '<section class="card bcitem bcinfo"><h3>' + esc(it.t) + '</h3>' + textHTML(it.x) + '</section>';
+    if (it.kind === 'Written') {
+      var rng = /^(\d+)\s*-\s*(\d+)$/.exec(it.set || ''), arr = Array.isArray(v) ? v : [];
+      return '<section class="card bcitem" id="bci-' + esc(it.id) + '">' + head + it.lines.map(function (q, i) {
+        var txt = arr[i] || '';
+        return '<label class="field"><span>' + (it.lines.length > 1 ? (i + 1) + '. ' : '') + esc(q) + '</span>' +
+          (ro ? '<p class="wtext">' + (esc(txt) || '<i>No answer</i>') + '</p>' : '<textarea rows="4" data-bcw="' + d + '|' + esc(it.id) + '|' + i + '">' + esc(txt) + '</textarea>') +
+          '<small class="bcwc" data-bcwc="' + esc(it.id) + '|' + i + '">' + wc(txt) + ' words' + (rng ? ' · aim for ' + rng[1] + '–' + rng[2] : '') + '</small></label>';
+      }).join('') + '</section>';
+    }
+    if (it.kind === 'Notes') return '<section class="card bcitem">' + head + (ro ? '<p class="wtext">' + esc(v || '') + '</p>' : '<textarea rows="5" data-bcn="' + d + '|' + esc(it.id) + '">' + esc(v || '') + '</textarea>') + '</section>';
+    if (it.kind === 'Tick') return '<section class="card bcitem"><label class="bctick"><input type="checkbox" data-bct="' + d + '|' + esc(it.id) + '"' + (v ? ' checked' : '') + (ro ? ' disabled' : '') + '> <span>' + esc(it.t) + '</span></label></section>';
+    if (it.kind === 'Video' || it.kind === 'Voice') {
+      var max = +it.set > 0 ? +it.set : 3, isV = it.kind === 'Video', rec = BCX.rec && BCX.rec.id === it.id ? BCX.rec : null;
+      var checks = it.lines.length ? '<ul class="bcchecks">' + it.lines.map(function (l, i) { return '<li><label><input type="checkbox" data-bcself="' + esc(it.id) + '|' + i + '"' + (((a._self || {})[it.id] || [])[i] ? ' checked' : '') + (ro ? ' disabled' : '') + '> ' + esc(l) + '</label></li>'; }).join('') + '</ul>' : '';
+      var body;
+      if (ro) body = v && v.ref ? mediaPlayer(it.kind, v.ref) : '<p class="lead">Not recorded.</p>';
+      else if (rec && rec.state === 'live') body = '<div class="bcrec">' + (isV ? '<video class="bcvideo live" id="bcrec-live" autoplay muted playsinline></video>' : '<p class="bcrecdot">● Recording…</p>') + '<div class="acts" style="align-items:center"><button class="btn primary" data-bcstop="' + esc(it.id) + '">Stop</button><span class="bctimer" id="bcrec-timer">0:00 / ' + max + ':00</span></div></div>';
+      else if (rec && rec.state === 'done') body = '<div class="bcrec">' + (isV ? '<video class="bcvideo" controls playsinline src="' + esc(rec.url) + '"></video>' : '<audio controls src="' + esc(rec.url) + '"></audio>') + '<div class="acts"><button class="btn primary" data-bcuse="' + d + '|' + esc(it.id) + '">Use this ' + (isV ? 'video' : 'recording') + '</button><button class="btn" data-bcredo="' + esc(it.id) + '">Record again</button></div></div>';
+      else body = (v && v.ref ? '<p class="bcsaved">' + I.check + ' Your ' + (isV ? 'video' : 'recording') + ' is handed in with your homework.</p>' + mediaPlayer(it.kind, v.ref) : '') +
+        '<div class="acts"><button class="btn primary" data-bcrec="' + d + '|' + esc(it.id) + '|' + it.kind + '|' + max + '">' + (isV ? IVID : MIC) + ' ' + (v && v.ref ? 'Record again' : 'Record ' + (isV ? 'a video' : 'my voice')) + '</button>' +
+        '<label class="btn filebtn">Choose a file<input type="file" class="sr" accept="' + (isV ? 'video/*' : 'audio/*') + '" data-bcfile="' + d + '|' + esc(it.id) + '|' + it.kind + '"></label></div>' +
+        '<small class="hiddennote" style="font-style:normal">Up to ' + max + ' minutes. Recording here keeps the file small. Files must be under 20 MB.</small>';
+      return '<section class="card bcitem" id="bci-' + esc(it.id) + '">' + head + (checks ? '<p class="bcsub">Before you record, check you will cover:</p>' + checks : '') + body + '<p class="pgstatus" role="status" id="bcst-' + esc(it.id) + '"></p></section>';
+    }
+    if (it.kind === 'Upload') {
+      var checks2 = it.lines.length ? '<p class="bcsub">Your plan includes:</p><ul class="bcchecks plain">' + it.lines.map(function (l) { return '<li>' + esc(l) + '</li>'; }).join('') + '</ul>' : '';
+      var cur = v && v.file ? '<p class="bcsaved">' + I.check + ' <a href="#blob:' + esc(v.file) + '">' + esc(v.fname || 'Your file') + '</a></p>' : v && v.link ? '<p class="bcsaved">' + I.check + ' <a href="' + esc(v.link) + '" target="_blank" rel="noopener">Your link</a></p>' : '';
+      if (ro) return '<section class="card bcitem">' + head + (cur || '<p class="lead">Nothing handed in.</p>') + '</section>';
+      return '<section class="card bcitem" id="bci-' + esc(it.id) + '">' + head + checks2 +
+        (it.link ? '<a class="btn" href="' + esc(copyLink(it.link)) + '" target="_blank" rel="noopener">' + ILINK + ' Make my copy of the template</a>' : '') + cur +
+        '<div class="bcup"><label class="btn primary filebtn">Upload a file<input type="file" class="sr" accept=".xlsx,.xls,.ods,.docx,.doc,.odt,.pdf,.pptx,image/*" data-bcup="' + d + '|' + esc(it.id) + '"></label>' +
+        '<span class="bcor">or</span><input type="url" placeholder="Paste the link to your copy" value="' + esc(v && v.link || '') + '" id="bcl-' + esc(it.id) + '"><button class="btn" data-bclink="' + d + '|' + esc(it.id) + '">Save link</button></div>' +
+        '<small class="hiddennote" style="font-style:normal">A link must be shared as "Anyone with the link can view" so your trainer can open it.</small>' +
+        '<p class="pgstatus" role="status" id="bcst-' + esc(it.id) + '"></p></section>';
+    }
+    return '';
+  }
+  function dayHTML(d) {
+    var sch = mySched() || { days: {} }, s = sch.days[d], di = dayInfo(d), h = hw(d), a = h.a || (h.a = {}), rv = myReview(d);
+    var open = dayOpen(s), st = dayStatus(d, h, rv, s);
+    var ro = !!(rv && rv.res !== 'revise');
+    var mats = di.items.filter(function (x) { return x.kind === 'Material'; });
+    var side = '<section class="card bclive"><h3>Live session</h3>' + liveHTML(s) + '</section>' +
+      (mats.length ? '<section class="card"><h3>Slides and materials</h3><div class="bcmats">' + mats.map(function (m) { return m.link ? '<a class="rowi" href="' + esc(m.link) + '" target="_blank" rel="noopener"><span class="txt"><b>' + esc(m.t) + '</b><small>Opens in a new tab</small></span>' + I.arrow + '</a>' : '<div class="rowi"><span class="txt"><b>' + esc(m.t) + '</b><small>Your trainer will add this soon</small></span></div>'; }).join('') + '</div></section>' : '');
+    var top = '<div class="pagebar">' + backBtn('bootcamp', 'Bootcamp') + '<h1 class="title">Day ' + d + '</h1><span></span></div>' +
+      '<section class="card bchero"><span class="bcnum">Day ' + d + '</span><h2>' + esc(di.t || 'Day ' + d) + '</h2>' + (di.x ? '<p>' + esc(di.x) + '</p>' : '') + '<span class="bcst st-' + st.k + '">' + esc(st.label) + '</span></section>';
+    var main;
+    if (!open) main = '<section class="card"><h3>Homework</h3><p class="lead" style="margin:0">Day ' + d + ' opens on ' + esc(dayLabel(s.date, true)) + '. The homework appears here after the live session starts that day.</p></section>';
+    else {
+      var items = di.items.filter(function (x) { return x.kind !== 'Material'; }), quiz = items.filter(function (x) { return x.kind === 'Quiz'; }), out = '', quizDone = false;
+      var rvBox = rv ? '<section class="card bcreview ' + (rv.res === 'revise' ? 'revise' : '') + '"><h3>Feedback from your trainer</h3><p class="bcres">' + esc(resultLabel(rv)) + '</p>' +
+        (rv.s ? '<ul class="bcscores">' + Object.keys(rv.s).map(function (k) { return '<li><span>' + esc(k) + '</span><b>' + rv.s[k] + ' / 4</b></li>'; }).join('') + '</ul>' : '') +
+        (rv.c ? '<p class="wtext">' + esc(rv.c) + '</p>' : '') + (rv.res === 'revise' ? '<p class="lead" style="margin:0">Update your homework below, then hand it in again.</p>' : '') + '</section>' : '';
+      items.forEach(function (it) {
+        if (it.kind === 'Quiz') { if (!quizDone) { quizDone = true; out += quizHTML(d, quiz, a, ro); } return; }
+        out += itemHTML(d, it, a, ro);
+      });
+      var due = s && s.date ? 'Hand in by 23:59 WIB, ' + dayLabel(s.date, true) + '.' : '';
+      var foot = ro ? '' : '<section class="card bchand"><div><b>' + (h.at ? 'Handed in ' + esc(new Date(h.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })) + (h.late ? ' · Late' : '') : 'Ready to hand in?') + '</b><small>' + esc(due) + ' Your answers are saved on this device as you go.</small></div>' +
+        '<button class="btn primary" data-bchand="' + d + '">' + (h.at ? 'Hand in again' : 'Hand in Day ' + d + ' homework') + '</button><p class="pgstatus" role="status" id="bchand-st"></p></section>';
+      main = rvBox + '<h2 class="blocktitle">Homework</h2>' + (due ? '<p class="lead" style="margin:-4px 0 8px">' + esc(due) + '</p>' : '') + out + foot;
+    }
+    return top + '<div class="bcdaygrid"><div class="bcmain">' + main + '</div><aside class="bcside">' + side + '</aside></div>';
+  }
+
+  /* ---------- participant: actions ---------- */
+  var saveT = null;
+  function saveSoon() { clearTimeout(saveT); saveT = setTimeout(function () { persist(); }, 500); }
+  document.addEventListener('input', function (e) {
+    var t = e.target;
+    if (t.dataset && t.dataset.bcw) {
+      var p = t.dataset.bcw.split('|'), a = hw(p[0]).a, arr = Array.isArray(a[p[1]]) ? a[p[1]] : (a[p[1]] = []);
+      arr[+p[2]] = t.value; saveSoon();
+      var c = document.querySelector('[data-bcwc="' + p[1] + '|' + p[2] + '"]'); if (c) c.textContent = c.textContent.replace(/^\d+ words/, wc(t.value) + ' words');
+    } else if (t.dataset && t.dataset.bcn) { var q = t.dataset.bcn.split('|'); hw(q[0]).a[q[1]] = t.value; saveSoon(); }
+  });
+  document.addEventListener('change', function (e) {
+    var t = e.target, ds = t.dataset || {};
+    if (ds.bcq) { var p = ds.bcq.split('|'), a = hw(p[0]).a; a[p[1]] = +t.value; BCX.quizShow = BCX.quizShow || {}; BCX.quizShow[p[0]] = false; saveSoon(); }
+    else if (ds.bct) { var q = ds.bct.split('|'); hw(q[0]).a[q[1]] = !!t.checked; saveSoon(); }
+    else if (ds.bcself) { var r = ds.bcself.split('|'), d = current && /^bc(\d)$/.exec(current); if (!d) return; var a2 = hw(d[1]).a; a2._self = a2._self || {}; (a2._self[r[0]] = a2._self[r[0]] || [])[+r[1]] = !!t.checked; saveSoon(); }
+    else if (ds.bcfile && t.files && t.files[0]) { var f = ds.bcfile.split('|'); uploadMedia(f[0], f[1], f[2], t.files[0], true); t.value = ''; }
+    else if (ds.bcup && t.files && t.files[0]) { var u = ds.bcup.split('|'); uploadDoc(u[0], u[1], t.files[0]); t.value = ''; }
+  });
+  function rerender() { var y = scrollY; route(); scrollTo(0, y); }
+  function status(id, msg) { var el = document.getElementById('bcst-' + id); if (el) el.textContent = msg; }
+  async function uploadMedia(d, id, kind, file, convert) {
+    var assets = await getAssets();
+    if (!assets) { status(id, noUpload()); return; }
+    try {
+      status(id, 'Preparing…');
+      var blob = file, type = file.type || (kind === 'Video' ? 'video/webm' : 'audio/webm');
+      if (convert && kind === 'Voice') { var up = await toUploadable(file, function (p) { status(id, 'Converting on this device… ' + Math.round(p * 100) + '%'); }); blob = up.blob; type = up.type; }
+      if (blob.size > 20 * 1024 * 1024) throw { code: 'too_large' };
+      status(id, 'Uploading… (' + Math.max(1, Math.round(blob.size / 1048576)) + ' MB)');
+      var r = await assets.upload(blob, { type: type });
+      hw(d).a[id] = { ref: '#blob:' + r.id, at: new Date().toISOString() };
+      persist(); await flushNow();
+      BCX.rec = null; rerender(); status(id, 'Saved. Hand in your homework at the bottom of the page when everything is ready.');
+    } catch (err) { status(id, err && err.code === 'too_large' ? 'This file is over 20 MB. Record in the app instead: it makes smaller files.' : uploadError(err)); }
+  }
+  async function uploadDoc(d, id, file) {
+    if (file.size > 20 * 1024 * 1024) { status(id, 'This file is over 20 MB.'); return; }
+    var assets = await getAssets();
+    if (!assets) { status(id, noUpload()); return; }
+    try {
+      status(id, 'Uploading…');
+      var r = await assets.upload(file, { type: file.type || 'application/octet-stream' });
+      hw(d).a[id] = { file: r.id, fname: file.name || 'Lesson plan', at: new Date().toISOString() };
+      persist(); await flushNow(); rerender(); status(id, 'Uploaded.');
+    } catch (err) { status(id, uploadError(err)); }
+  }
+  /* in-app recording (the website can use the camera and microphone) */
+  async function startRec(d, id, kind, max) {
+    stopTracks();
+    var isV = kind === 'Video';
+    if (!navigator.mediaDevices || !window.MediaRecorder) { status(id, 'Recording isn\'t available in this browser. Use "Choose a file" instead.'); return; }
+    var stream;
+    try { stream = await navigator.mediaDevices.getUserMedia(isV ? { audio: true, video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } } : { audio: true }); }
+    catch (e) { status(id, 'Allow the ' + (isV ? 'camera and microphone' : 'microphone') + ' for this site in your browser, then try again. Or use "Choose a file".'); return; }
+    var types = isV ? ['video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'] : ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+    var mime = types.find(function (m) { return MediaRecorder.isTypeSupported(m); }) || '';
+    var rec;
+    try { rec = new MediaRecorder(stream, Object.assign(mime ? { mimeType: mime } : {}, isV ? { videoBitsPerSecond: 500000, audioBitsPerSecond: 64000 } : { audioBitsPerSecond: 64000 })); }
+    catch (e) { stream.getTracks().forEach(function (t) { t.stop(); }); status(id, 'Recording isn\'t available in this browser. Use "Choose a file" instead.'); return; }
+    var chunks = [];
+    rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+    BCX.rec = { id: id, d: d, kind: kind, state: 'live', stream: stream, recorder: rec, t0: Date.now(), max: max };
+    rec.onstop = function () {
+      var r = BCX.rec; if (!r || r.recorder !== rec) return;
+      stopTracks();
+      r.blob = new Blob(chunks, { type: (rec.mimeType || mime || (isV ? 'video/webm' : 'audio/webm')).split(';')[0] });
+      r.url = URL.createObjectURL(r.blob); r.state = 'done'; clearInterval(r.timer); rerender();
+    };
+    rec.start(1000);
+    rerender();
+    var live = document.getElementById('bcrec-live'); if (live) { live.srcObject = stream; try { live.play(); } catch (e) {} }
+    BCX.rec.timer = setInterval(function () {
+      var r = BCX.rec; if (!r || r.state !== 'live') return;
+      var s = Math.floor((Date.now() - r.t0) / 1000), el = document.getElementById('bcrec-timer');
+      if (el) el.textContent = Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2) + ' / ' + r.max + ':00';
+      if (s >= r.max * 60) try { r.recorder.stop(); } catch (e) {}
+    }, 500);
+  }
+  function stopTracks() { var r = BCX.rec; if (r && r.stream) { r.stream.getTracks().forEach(function (t) { t.stop(); }); r.stream = null; } }
+  function handIn(d) {
+    var h = hw(d), a = h.a, miss = required(d).filter(function (it) { return !itemDone(it, a); });
+    var st = document.getElementById('bchand-st');
+    if (miss.length) {
+      if (st) st.textContent = 'Still to do: ' + miss.map(function (x) { return x.kind === 'Quiz' ? 'the quiz' : x.t; }).filter(function (x, i, arr) { return arr.indexOf(x) === i; }).join(' · ');
+      var first = miss[0], el = document.getElementById(first.kind === 'Quiz' ? 'bci-quiz-' + d : 'bci-' + first.id); if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      return;
+    }
+    var s = (mySched() || { days: {} }).days[d];
+    h.at = new Date().toISOString(); h.late = !!(s && s.date && jkt().date > s.date);
+    persist(); flushNow().then(function () { rerender(); var s2 = document.getElementById('bchand-st'); if (s2) s2.textContent = 'Handed in. Your trainer can see it now.'; SEPA_SYNC(); });
+  }
+
+  /* ---------- trainers: batch page ---------- */
+  async function loadRoster(force) {
+    if (BCX.rosterLoading || (BCX.roster && !force && Date.now() - BCX.rosterAt < 60000)) return;
+    BCX.rosterLoading = true;
+    try { BCX.roster = await S.call('bootRoster', {}); }
+    catch (e) { BCX.msg = e.message || 'Could not load the participants.'; if (!BCX.roster) BCX.roster = { people: [], batches: {} }; }
+    BCX.rosterAt = Date.now(); BCX.rosterLoading = false;
+    if (current === 'bct' || /^bcr-/.test(current || '')) rerender();
+  }
+  function batches() {
+    var d = data(), out = {};
+    if (d) Object.keys(d.sched).forEach(function (k) { out[k] = d.sched[k].name; });
+    if (BCX.roster) Object.keys(BCX.roster.batches).forEach(function (k) { if (!out[k] && d && d.sched[k]) out[k] = BCX.roster.batches[k]; });
+    return out;
+  }
+  function peopleOf(bk) { return (BCX.roster ? BCX.roster.people : []).filter(function (p) { return norm(p.batch) === bk; }).sort(function (a, b) { return a.name.localeCompare(b.name); }); }
+  function rec(uid) { return (PG.bcAll || {})[uid] || {}; }
+  function theirHw(uid, d) { var p = (PG.practice || {})[uid]; return (p && p.bc && p.bc[d]) || {}; }
+  function theirRv(uid, d) { return ((PG.reviews || {})[uid] || {})['bc' + d] || null; }
+  function cellStatus(uid, d) {
+    var h = theirHw(uid, d), rv = theirRv(uid, d);
+    if (rv && !(rv.res === 'revise' && h.at && h.at > rv.atIso)) return { k: rv.res === 'revise' ? 'revise' : 'done', label: resultLabel(rv) };
+    if (h.at) return { k: 'new', label: (rv ? 'Handed in again' : 'To review') + (h.late ? ' · Late' : '') };
+    return { k: 'none', label: 'Not handed in' };
+  }
+  function trainerHTML() {
+    if (!isTrainer()) return '<div class="empty">This page is for trainers.</div>';
+    loadRoster(false);
+    var bs = batches(), keys = Object.keys(bs);
+    if (!BCX.batch || !bs[BCX.batch]) BCX.batch = keys[0] || '';
+    var tabs = [['people', 'Participants'], ['schedule', 'Schedule'], ['content', 'Content']];
+    var h = '<div class="pagebar">' + backBtn('review', 'Review') + '<h1 class="title">Bootcamp</h1><span></span></div>' +
+      '<div class="cetabs" role="tablist">' + tabs.map(function (t) { return '<button role="tab" class="chip' + (BCX.tab === t[0] ? ' on' : '') + '" aria-selected="' + (BCX.tab === t[0]) + '" data-bctab="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div>';
+    if (BCX.tab !== 'content') h += '<div class="bcbar"><label class="field"><span>Batch</span><select id="bc-batch">' + (keys.length ? keys.map(function (k) { return '<option value="' + esc(k) + '"' + (k === BCX.batch ? ' selected' : '') + '>' + esc(bs[k]) + '</option>'; }).join('') : '<option value="">No batches yet</option>') + '</select></label>' +
+      (BCX.tab === 'schedule' ? '<label class="field"><span>Or add a new batch</span><span class="bcrow"><input id="bc-newbatch" placeholder="For example: Batch 07"><button class="btn" data-bcnewbatch="1">Add</button></span></label>' : '') + '</div>';
+    if (BCX.msg) h += '<p class="pgstatus" role="status">' + esc(BCX.msg) + '</p>';
+    if (BCX.tab === 'people') h += peopleHTML();
+    else if (BCX.tab === 'schedule') h += schedHTML();
+    else h += contentHTML();
+    return h;
+  }
+  function peopleHTML() {
+    if (!BCX.roster) return '<p class="pgstatus">Loading participants…</p>';
+    if (!BCX.batch) return '<div class="empty">No bootcamp batches yet. Add one in the Schedule tab.</div>';
+    var ps = peopleOf(BCX.batch);
+    if (!ps.length) return '<div class="empty">No participants in this batch yet. Register them with this batch name in Trainer tools (or the Users tab).</div>';
+    var rows = ps.map(function (p) {
+      var r = rec(p.uid), att = r.att || {};
+      return '<tr><th scope="row"><b>' + esc(p.name) + '</b><small>' + esc(p.email) + '</small></th>' + DAYS.map(function (d) {
+        var cs = cellStatus(p.uid, d);
+        return '<td><label class="bcatt"><input type="checkbox" data-bcatt="' + esc(p.uid) + '|' + d + '"' + (att[d] ? ' checked' : '') + '> Attended</label>' +
+          (cs.k === 'none' ? '<span class="bccell none">' + esc(cs.label) + '</span>' : '<button class="bccell ' + cs.k + '" data-go="bcr-' + esc(p.uid) + '-' + d + '">' + esc(cs.label) + '</button>') + '</td>';
+      }).join('') + '<td>' + (r.unlocked ? '<span class="bccell done">Open</span><button class="linkbtn" data-bclock="' + esc(p.uid) + '">Lock</button>' : '<span class="bccell none">Locked</span>') + '</td></tr>';
+    }).join('');
+    var un = BCX.unlock && BCX.unlock.batch === BCX.batch ? unlockHTML(ps) : '<div class="acts"><button class="btn primary" data-bcunlock="1">Unlock the course for this batch</button></div>';
+    return '<div class="bctablewrap"><table class="bctable"><thead><tr><th scope="col">Participant</th>' + DAYS.map(function (d) { return '<th scope="col">Day ' + d + '</th>'; }).join('') + '<th scope="col">Course</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + un;
+  }
+  function missed(uid) { var att = rec(uid).att || {}; return DAYS.filter(function (d) { return !att[d]; }); }
+  function unlockHTML(ps) {
+    return '<section class="card bcunlock"><h3>Unlock the course</h3><p class="lead" style="margin:0">Participants who attended all 3 days are ticked. Anyone who missed a day is not ticked; tick them to unlock anyway.</p>' +
+      ps.map(function (p) {
+        var m = missed(p.uid), on = BCX.unlock.sel[p.uid];
+        return '<label class="bcurow' + (m.length ? ' warn' : '') + '"><input type="checkbox" data-bcusel="' + esc(p.uid) + '"' + (on ? ' checked' : '') + (rec(p.uid).unlocked ? ' disabled' : '') + '> <span><b>' + esc(p.name) + '</b>' +
+          (rec(p.uid).unlocked ? '<small>Already open</small>' : m.length ? '<small class="bcwarn">⚠ Missed Day ' + m.join(', Day ') + '</small>' : '<small>Attended all 3 days</small>') + '</span></label>';
+      }).join('') +
+      '<div class="acts" style="align-items:center"><button class="btn primary" data-bcunlockgo="1">Unlock for ' + Object.keys(BCX.unlock.sel).filter(function (k) { return BCX.unlock.sel[k] && !rec(k).unlocked; }).length + ' participant(s)</button><button class="btn" data-bcunlockcancel="1">Cancel</button><span class="pgstatus" role="status" id="bcu-st"></span></div></section>';
+  }
+  async function writeRec(uid, patch) {
+    var cur = Object.assign({}, rec(uid), patch, { by: PG.me });
+    PG.bcAll = PG.bcAll || {}; PG.bcAll[uid] = cur;
+    await PG.db.doc('bootcamp/' + uid).set(cur);
+  }
+  function schedHTML() {
+    var d = data(), s = d && BCX.batch && d.sched[BCX.batch];
+    if (!BCX.batch) return '<div class="empty">Add a batch above to set its dates.</div>';
+    var days = (s && s.days) || {};
+    return '<section class="card"><h3>' + esc(s ? s.name : BCX.batch) + ': dates and live links</h3><p class="lead" style="margin:0">Times are Jakarta time (WIB). Each day opens on its date; homework is due at 23:59.</p>' +
+      DAYS.map(function (n) {
+        var x = days[n] || {};
+        return '<fieldset class="bcsched"><legend>Day ' + n + ' · ' + esc(dayInfo(n).t || '') + '</legend><div class="bcschedgrid">' +
+          '<label class="field"><span>Date</span><input type="date" id="bcs-date-' + n + '" value="' + esc(x.date || '') + '"></label>' +
+          '<label class="field"><span>Start</span><input type="time" id="bcs-start-' + n + '" value="' + esc(x.start || '') + '"></label>' +
+          '<label class="field"><span>End</span><input type="time" id="bcs-end-' + n + '" value="' + esc(x.end || '') + '"></label>' +
+          '<label class="field bcwide"><span>Live session link (Zoom or Meet)</span><input type="url" id="bcs-link-' + n + '" value="' + esc(x.link || '') + '" placeholder="https://"></label></div></fieldset>';
+      }).join('') +
+      '<div class="acts" style="align-items:center"><button class="btn primary" data-bcsavesched="1">Save schedule</button><span class="pgstatus" role="status" id="bcs-st"></span></div>' +
+      '<p class="hiddennote" style="font-style:normal">You can also edit this in the SEPA Course data Sheet, tab <b>Content: Bootcamp schedule</b>.</p></section>';
+  }
+  function applyMap(res) {
+    window.__CONTENT = res.map; window.__CONTENT_V = res.v;
+    try { localStorage.setItem('sepa-content', JSON.stringify({ v: res.v, map: res.map })); } catch (e) {}
+    sepaApplyContent(res.map);
+    if (res.rows) BCX.rows = res.rows;
+  }
+  /* trainers: edit bootcamp content */
+  var KINDS = ['Material', 'Info', 'Quiz', 'Written', 'Notes', 'Video', 'Voice', 'Upload', 'Tick', 'Day'];
+  var KHELP = { Day: 'The day\'s name (Title) and intro (Text). Setting: meets or 1-4; Lines: scoring criteria for 1-4.', Material: 'A link to slides or a handout.', Info: 'A card of text. Lines starting with "- " become bullets.', Quiz: 'Title = the question. Lines = options, the FIRST is correct (the app shuffles them). Text = explanation shown after checking.', Written: 'Lines = questions (one answer box each). Setting = words per answer, e.g. 40-120.', Notes: 'An optional box, not marked.', Video: 'Lines = self-check before recording. Setting = longest minutes (1–5).', Voice: 'Like Video, sound only.', Upload: 'Lines = checklist. Link = template (participants get "Make my copy").', Tick: 'A sentence to tick (optional).' };
+  function contentHTML() {
+    if (!BCX.rows) { if (!BCX.loadingRows) { BCX.loadingRows = true; S.call('bootRows', {}).then(function (r) { BCX.rows = r.rows; BCX.loadingRows = false; if (current === 'bct') rerender(); }, function (e) { BCX.loadingRows = false; BCX.msg = e.message; if (current === 'bct') rerender(); }); } return '<p class="pgstatus">Loading…</p>'; }
+    var d = BCX.editDay, list = BCX.rows.filter(function (r) { return r.day === d; }).sort(function (a, b) { return a.o - b.o || a.row - b.row; });
+    var ed = BCX.edit;
+    return '<div class="cetabs">' + DAYS.map(function (n) { return '<button class="chip' + (n === d ? ' on' : '') + '" data-bceday="' + n + '">Day ' + n + '</button>'; }).join('') + '</div>' +
+      list.map(function (r) {
+        if (ed && ed.id === r.id) return editForm(r);
+        return '<div class="wuitem' + (r.prob ? ' bad' : '') + (r.show ? '' : ' hid') + '"><div class="wuhead"><div><b>' + esc(r.kind) + ' · ' + esc(r.t || '(no title)') + '</b><small>' + (r.kind === 'Quiz' ? r.lines.length + ' options' : r.lines.length ? r.lines.length + ' lines' : '') + (r.show ? '' : ' · hidden') + '</small>' + (r.prob ? '<p class="ceprob">' + esc(r.prob) + '</p>' : '') + '</div><button class="btn sm" data-bcedit="' + esc(r.id) + '">Edit</button></div></div>';
+      }).join('') +
+      (ed && !ed.id ? editForm(ed) : '<div class="acts"><button class="btn" data-bcadd="1">+ Add an item to Day ' + d + '</button></div>') +
+      '<p class="hiddennote" style="font-style:normal">Bulk edits: SEPA Course data Sheet, tab <b>Content: Bootcamp</b>.</p>';
+  }
+  function editForm(r) {
+    var k = r.kind || 'Written';
+    return '<form class="wuform card" data-bcform="' + esc(r.id || 'new') + '"><div class="fgrid">' +
+      '<label class="field"><span>Kind</span><select name="kind">' + KINDS.map(function (x) { return '<option' + (x === k ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></label>' +
+      '<label class="field"><span>Order</span><input name="o" type="number" value="' + esc(r.o == null || r.o === 999 ? '' : r.o) + '" placeholder="Last"></label></div>' +
+      '<p class="hiddennote" style="font-style:normal;margin:0">' + esc(KHELP[k] || '') + '</p>' +
+      '<label class="field"><span>Title</span><input name="t" value="' + esc(r.t || '') + '"></label>' +
+      '<label class="field"><span>Text</span><textarea name="x" rows="4">' + esc(r.x || '') + '</textarea></label>' +
+      '<label class="field"><span>Lines (one per line)</span><textarea name="lines" rows="4">' + esc((r.lines || []).join('\n')) + '</textarea></label>' +
+      '<div class="fgrid"><label class="field"><span>Setting</span><input name="set" value="' + esc(r.set || '') + '"></label><label class="field"><span>Link</span><input name="link" type="url" value="' + esc(r.link || '') + '" placeholder="https://"></label></div>' +
+      '<label class="wucheck"><input type="checkbox" name="show"' + (r.show === false ? '' : ' checked') + '> Show to participants</label>' +
+      (r.prob ? '<p class="ceprob">' + esc(r.prob) + '</p>' : '') +
+      '<div class="wubtns"><button class="btn primary" type="submit">' + (r.id ? 'Save' : 'Add') + '</button><button class="btn" type="button" data-bccancel="1">Cancel</button>' + (r.id ? '<button class="btn danger" type="button" data-bcdel="' + esc(r.id) + '">Delete</button>' : '') + '</div></form>';
+  }
+
+  /* ---------- trainers: review one participant's day ---------- */
+  function reviewHTML(uid, d) {
+    var p = (BCX.roster && BCX.roster.people.find(function (x) { return x.uid === uid; })) || { name: (PG.names || {})[uid] || 'Participant', email: '' };
+    if (!BCX.roster) loadRoster(false);
+    var h = theirHw(uid, d), a = h.a || {}, rv = theirRv(uid, d), di = dayInfo(d);
+    var list = BCX.roster ? peopleOf(norm(p.batch)) : [], i = list.findIndex(function (x) { return x.uid === uid; });
+    var prev = list[i - 1], next = list[i + 1];
+    var nav = '<div class="rvnav"><button class="btn sm" data-go="' + (prev ? 'bcr-' + prev.uid + '-' + d : '') + '"' + (prev ? '' : ' disabled') + '>' + I.back + ' Previous</button><span>' + (i + 1) + ' of ' + list.length + '</span><button class="btn sm" data-go="' + (next ? 'bcr-' + next.uid + '-' + d : '') + '"' + (next ? '' : ' disabled') + '>Next ' + I.arrow + '</button></div>';
+    var answers = h.at ? di.items.filter(function (x) { return x.kind !== 'Material' && x.kind !== 'Info'; }).map(function (it) {
+      if (it.kind === 'Quiz') return '';
+      return itemHTML(d, it, a, true);
+    }).join('') : '<div class="empty">Not handed in yet.</div>';
+    var qz = quizItems(d);
+    if (h.at && qz.length) { var sc = quizScore(d, a); answers = '<section class="card bcitem"><h3>Quiz</h3><p class="bcscore">' + sc.ok + ' / ' + sc.n + ' correct</p></section>' + answers; }
+    var scale = di.scale || 'meets', crit = di.crit || [], s = (rv && rv.s) || {};
+    var form = '<section class="card bcscoreform"><h3>Your feedback</h3>' +
+      (scale === 'meets' ? '<div class="bcres-pick"><label><input type="radio" name="bcres" value="meets"' + (rv && rv.res === 'meets' ? ' checked' : '') + '> Meets expectations</label><label><input type="radio" name="bcres" value="revise"' + (rv && rv.res === 'revise' ? ' checked' : '') + '> Needs revision</label></div>' :
+        crit.map(function (c, ci) { return '<div class="bccrit"><span>' + esc(c) + '</span><span class="bcpick">' + [1, 2, 3, 4].map(function (n) { return '<label><input type="radio" name="bcc-' + ci + '" value="' + n + '"' + (s[c] === n ? ' checked' : '') + '><span>' + n + '</span></label>'; }).join('') + '</span></div>'; }).join('') +
+        '<label class="bcrevise"><input type="checkbox" id="bc-revise"' + (rv && rv.res === 'revise' ? ' checked' : '') + '> Ask for a revision</label>') +
+      '<label class="field"><span>Comment for the participant</span><textarea id="bc-comment" rows="4" placeholder="One strength and one thing to work on">' + esc(rv ? rv.c || '' : '') + '</textarea></label>' +
+      '<div class="acts" style="align-items:center"><button class="btn primary" data-bcrvsave="' + esc(uid) + '|' + d + '"' + (h.at ? '' : ' disabled') + '>' + (rv ? 'Update feedback' : 'Send feedback') + '</button><span class="pgstatus" role="status" id="bcrv-st">' + (rv ? 'Sent ' + esc(rv.at || '') : '') + '</span></div>' +
+      '<p class="hiddennote" style="font-style:normal">' + (scale === 'meets' ? 'Meets expectations or Needs revision, plus a comment.' : 'Score each point from 1 to 4.') + ' The participant gets an email.</p></section>';
+    return '<div class="pagebar">' + backBtn('bct', 'Bootcamp') + '<h1 class="title">Day ' + d + ' homework</h1><span></span></div>' + nav +
+      '<div class="card bcwho"><div><b>' + esc(p.name) + '</b><small>' + esc(p.email) + (h.at ? ' · handed in ' + esc(new Date(h.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })) : '') + '</small></div>' + (h.late ? '<span class="ctag newtag">Late</span>' : '') + '</div>' +
+      '<div class="bcrvgrid"><div>' + answers + '</div><aside>' + form + '</aside></div>';
+  }
+  async function saveReview(uid, d) {
+    var di = dayInfo(d), st = document.getElementById('bcrv-st'), c = (document.getElementById('bc-comment') || {}).value || '';
+    var entry = { bc: d, c: c.trim(), by: PG.me, at: today(), atIso: new Date().toISOString() };
+    if ((di.scale || 'meets') === 'meets') {
+      var r = document.querySelector('input[name=bcres]:checked');
+      if (!r) { st.textContent = 'Choose Meets expectations or Needs revision.'; return; }
+      entry.res = r.value;
+    } else {
+      var s = {}, total = 0, crit = di.crit || [];
+      for (var i = 0; i < crit.length; i++) { var x = document.querySelector('input[name="bcc-' + i + '"]:checked'); if (!x) { st.textContent = 'Score every point first (' + crit[i] + ').'; return; } s[crit[i]] = +x.value; total += +x.value; }
+      entry.s = s; entry.total = total; entry.max = crit.length * 4; entry.res = document.getElementById('bc-revise').checked ? 'revise' : 'scored';
+    }
+    st.textContent = 'Sending…';
+    var docv = Object.assign({}, (PG.reviews || {})[uid] || {}); docv['bc' + d] = entry;
+    try { await PG.db.doc('reviews/' + uid).set(docv); PG.reviews[uid] = docv; st.textContent = 'Sent. The participant can see it now.'; }
+    catch (e) { st.textContent = 'Couldn\'t send. Check your connection and try again.'; }
+  }
+
+  /* ---------- clicks ---------- */
+  document.addEventListener('click', async function (e) {
+    var t = e.target.closest('button, a'); if (!t) return;
+    var ds = t.dataset || {};
+    if (ds.bccheck) { e.preventDefault(); var d = ds.bccheck, items = quizItems(d), a = hw(d).a; if (items.some(function (x) { return a[x.id] == null; })) { var miss = items.find(function (x) { return a[x.id] == null; }); var el = document.querySelector('input[name="q-' + miss.id + '"]'); if (el) el.focus(); alert('Answer every question first.'); return; } BCX.quizShow = BCX.quizShow || {}; BCX.quizShow[d] = true; persist(); rerender(); return; }
+    if (ds.bcretry) { e.preventDefault(); var d2 = ds.bcretry, a2 = hw(d2).a; quizItems(d2).forEach(function (x) { delete a2[x.id]; }); BCX.quizShow[d2] = false; persist(); rerender(); var q = document.getElementById('bci-quiz-' + d2); if (q) q.scrollIntoView({ block: 'start' }); return; }
+    if (ds.bcrec) { e.preventDefault(); var r = ds.bcrec.split('|'); startRec(r[0], r[1], r[2], +r[3]); return; }
+    if (ds.bcstop) { e.preventDefault(); try { BCX.rec.recorder.stop(); } catch (er) {} return; }
+    if (ds.bcredo) { e.preventDefault(); var old = BCX.rec; BCX.rec = null; if (old && old.url) URL.revokeObjectURL(old.url); rerender(); return; }
+    if (ds.bcuse) { e.preventDefault(); var u = ds.bcuse.split('|'), rr = BCX.rec; if (rr && rr.blob) uploadMedia(u[0], u[1], rr.kind, rr.blob, false); return; }
+    if (ds.bclink) { e.preventDefault(); var l = ds.bclink.split('|'), inp = document.getElementById('bcl-' + l[1]), v = (inp && inp.value || '').trim(); if (!/^https:\/\//.test(v)) { status(l[1], 'Paste a link that starts with https://'); return; } hw(l[0]).a[l[1]] = { link: v, at: new Date().toISOString() }; persist(); await flushNow(); rerender(); status(l[1], 'Link saved.'); return; }
+    if (ds.bchand) { e.preventDefault(); handIn(ds.bchand); return; }
+    // trainers
+    if (ds.bctab) { BCX.tab = ds.bctab; BCX.msg = ''; BCX.edit = null; rerender(); return; }
+    if (ds.bcunlock) { var sel = {}; peopleOf(BCX.batch).forEach(function (p) { if (!rec(p.uid).unlocked && !missed(p.uid).length) sel[p.uid] = true; }); BCX.unlock = { batch: BCX.batch, sel: sel }; rerender(); return; }
+    if (ds.bcunlockcancel) { BCX.unlock = null; rerender(); return; }
+    if (ds.bcunlockgo) {
+      var ids = Object.keys(BCX.unlock.sel).filter(function (k) { return BCX.unlock.sel[k] && !rec(k).unlocked; }), stEl = document.getElementById('bcu-st');
+      if (!ids.length) { stEl.textContent = 'Tick at least one participant.'; return; }
+      var warn = ids.filter(function (k) { return missed(k).length; }).length;
+      if (!confirm('Unlock the self-paced course for ' + ids.length + ' participant(s)?' + (warn ? ' ' + warn + ' of them missed a day.' : ''))) return;
+      t.disabled = true; stEl.textContent = 'Unlocking…';
+      try { for (var i = 0; i < ids.length; i++) await writeRec(ids[i], { unlocked: today() }); BCX.unlock = null; BCX.msg = 'Unlocked for ' + ids.length + ' participant(s).'; rerender(); }
+      catch (er) { stEl.textContent = 'Couldn\'t save. Check your connection and try again.'; t.disabled = false; }
+      return;
+    }
+    if (ds.bclock) { if (!confirm('Lock the course again for this participant?')) return; try { var cur = Object.assign({}, rec(ds.bclock)); delete cur.unlocked; PG.bcAll[ds.bclock] = cur; await PG.db.doc('bootcamp/' + ds.bclock).set(Object.assign(cur, { by: PG.me })); rerender(); } catch (er) { alert('Couldn\'t save.'); } return; }
+    if (ds.bcsavesched) {
+      var days = DAYS.map(function (n) { var g = function (k) { return (document.getElementById('bcs-' + k + '-' + n) || {}).value || ''; }; return { day: n, date: g('date'), start: g('start'), end: g('end'), link: g('link').trim() }; });
+      var st2 = document.getElementById('bcs-st'), name = (data() && data().sched[BCX.batch] && data().sched[BCX.batch].name) || BCX.newName || BCX.batch;
+      t.disabled = true; st2.textContent = 'Saving…';
+      try { applyMap(await S.call('bootSched', { batch: name, days: days })); BCX.newName = ''; BCX.msg = 'Schedule saved.'; rerender(); }
+      catch (er) { st2.textContent = er.message || 'Couldn\'t save.'; t.disabled = false; }
+      return;
+    }
+    if (ds.bcnewbatch) { var nb = (document.getElementById('bc-newbatch') || {}).value || ''; nb = nb.trim(); if (!nb) return; BCX.batch = norm(nb); BCX.newName = nb; var dd = data(); if (dd && !dd.sched[BCX.batch]) { dd.sched[BCX.batch] = { name: nb, days: {} }; } BCX.msg = 'Set the dates for ' + nb + ', then Save schedule.'; rerender(); return; }
+    if (ds.bceday) { BCX.editDay = +ds.bceday; BCX.edit = null; rerender(); return; }
+    if (ds.bcedit) { BCX.edit = BCX.rows.find(function (r) { return r.id === ds.bcedit; }) || null; rerender(); return; }
+    if (ds.bcadd) { BCX.edit = { id: '', day: BCX.editDay, kind: 'Written', show: true, lines: [] }; rerender(); return; }
+    if (ds.bccancel) { BCX.edit = null; rerender(); return; }
+    if (ds.bcdel) { if (!confirm('Delete this item?')) return; try { applyMap(await S.call('bootDelete', { id: ds.bcdel })); BCX.edit = null; rerender(); } catch (er) { alert(er.message); } return; }
+    if (ds.bcrvsave) { var rp = ds.bcrvsave.split('|'); t.disabled = true; await saveReview(rp[0], +rp[1]); t.disabled = false; return; }
+  });
+  document.addEventListener('change', async function (e) {
+    var t = e.target, ds = t.dataset || {};
+    if (t.id === 'bc-batch') { BCX.batch = t.value; BCX.unlock = null; BCX.msg = ''; rerender(); }
+    else if (ds.bcusel) { BCX.unlock.sel[ds.bcusel] = t.checked; var b = document.querySelector('[data-bcunlockgo]'); if (b) b.textContent = 'Unlock for ' + Object.keys(BCX.unlock.sel).filter(function (k) { return BCX.unlock.sel[k] && !rec(k).unlocked; }).length + ' participant(s)'; }
+    else if (ds.bcatt) { var p = ds.bcatt.split('|'), att = Object.assign({}, rec(p[0]).att || {}); if (t.checked) att[p[1]] = true; else delete att[p[1]]; try { await writeRec(p[0], { att: att }); } catch (er) { t.checked = !t.checked; alert('Couldn\'t save attendance. Check your connection.'); } }
+    else if (t.name === 'kind' && t.closest('[data-bcform]')) { var f = t.closest('form'); BCX.edit = Object.assign({}, BCX.edit, formData(f)); rerender(); }
+  });
+  function formData(f) {
+    var g = function (n) { return f.elements[n] ? f.elements[n].value : ''; };
+    return { id: f.dataset.bcform === 'new' ? '' : f.dataset.bcform, day: BCX.editDay, kind: g('kind'), o: g('o'), t: g('t').trim(), x: g('x').trim(), lines: g('lines').split('\n').map(function (s) { return s.trim(); }).filter(Boolean), set: g('set').trim(), link: g('link').trim(), show: !!f.elements.show.checked };
+  }
+  document.addEventListener('submit', async function (e) {
+    var f = e.target; if (!f.dataset || f.dataset.bcform == null) return;
+    e.preventDefault();
+    var d = formData(f), b = f.querySelector('[type=submit]'); b.disabled = true;
+    try { var r = await S.call('bootSave', d); applyMap(r); var saved = BCX.rows.find(function (x) { return x.id === r.id; }); BCX.edit = saved && saved.prob ? saved : null; BCX.msg = saved && saved.prob ? 'Saved, but there is a problem (in red).' : 'Saved.'; rerender(); }
+    catch (er) { BCX.msg = er.message || 'Couldn\'t save.'; b.disabled = false; rerender(); }
+  });
+
+  /* ---------- routes ---------- */
+  var ALLOWED_LOCKED = /^(bootcamp|bc[123]|me|help|notifs|saved)$/;
+  var prevRoute = route;
+  route = function () {
+    if (!SESSION) return prevRoute();
+    var h = location.hash.slice(1) || 'home', html = null, page = 'home';
+    if (BCX.rec && BCX.rec.state === 'live' && h !== current) { try { BCX.rec.recorder.stop(); } catch (e) {} stopTracks(); BCX.rec = null; }
+    if (h === 'bct') { page = 'review'; html = trainerHTML(); }
+    else if (/^bcr-[\w-]+-[123]$/.test(h)) { var m = /^bcr-([\w-]+)-([123])$/.exec(h); page = 'review'; html = reviewHTML(m[1], +m[2]); }
+    else if (applies() && (h === 'bootcamp' || (locked() && !ALLOWED_LOCKED.test(h)))) { page = 'home'; html = overviewHTML(); h = 'bootcamp'; }
+    else if (applies() && /^bc[123]$/.test(h)) { page = 'home'; html = dayHTML(+h.slice(2)); }
+    if (html == null) return prevRoute();
+    current = h;
+    try { speechSynthesis.cancel(); } catch (e) {}
+    app.innerHTML = html;
+    document.querySelectorAll('[data-nav]').forEach(function (b) { if (b.dataset.nav === page) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
+    document.body.className = document.body.className.replace(/\bpg-\S+/g, '').trim() + ' pg-' + (h === 'bct' || /^bcr-/.test(h) ? 'bctrainer' : 'bootcamp');
+    scrollTo(0, 0);
+  };
+  // Me page: a Bootcamp row (participants in a bootcamp batch, and trainers)
+  var prevMe = mePage;
+  mePage = function () {
+    var h = prevMe();
+    if (isTrainer()) return h + '<div class="card"><button class="linkrow" data-go="bct"><span>Bootcamp: batches, homework and unlocking</span>' + I.arrow + '</button></div>';
+    if (applies()) return '<div class="card"><button class="linkrow" data-go="bootcamp"><span>Teacher Bootcamp: homework and feedback</span>' + I.arrow + '</button></div>' + h;
+    return h;
+  };
+  // Review page (trainers): Bootcamp first
+  var prevReview = reviewPage;
+  reviewPage = function () {
+    var h = prevReview(), n = 0;
+    if (BCX.roster) BCX.roster.people.forEach(function (p) { DAYS.forEach(function (d) { if (cellStatus(p.uid, d).k === 'new') n++; }); });
+    var box = '<button class="nextbox" data-go="bct"><span><b>Bootcamp' + (n ? ' · ' + n + ' to review' : '') + '</b><small>Attendance, homework reviews and unlocking the course</small></span>' + I.arrow + '</button>';
+    return PG.trainer ? h.replace('</header>', '</header>' + box) : h;
+  };
+  // Home (course open): a reminder while bootcamp homework is still open
+  var prevHome = homePage;
+  homePage = function () {
+    var h = prevHome();
+    if (!applies() || locked()) return h;
+    var open = DAYS.filter(function (d) { var st = dayStatus(d, (PR.bc || {})[d] || {}, myReview(d), (mySched() || { days: {} }).days[d]); return st.k === 'todo' || st.k === 'revise'; });
+    if (!open.length) return h;
+    var i = h.indexOf('<section');
+    var box = '<button class="nextbox bchome" data-go="bootcamp"><span><b>Bootcamp homework to finish</b><small>Day ' + open.join(', Day ') + '</small></span>' + I.arrow + '</button>';
+    return i < 0 ? h + box : h.slice(0, i) + box + h.slice(i);
+  };
+
+  // keep the unlock state on this device, and re-show the page when the trainer changes it
+  window.SEPA_bcChanged = function () {
+    if (PG.bc && S.me) try { localStorage.setItem('sepa-bcu-' + S.me.uid, PG.bc.unlocked ? '1' : '0'); } catch (e) {}
+    if (/^(home|bootcamp|bc[123]|topics|tasks|me)$/.test(current || '') || locked()) { if (!(document.activeElement && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName))) rerender(); }
+    else if (current === 'bct' || /^bcr-/.test(current || '')) { if (!(document.activeElement && /^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement.tagName))) rerender(); }
+  };
+  window.SEPA_bootcamp = { state: function () { return { applies: applies(), locked: locked(), sched: mySched() }; }, BCX: BCX };
+
+  /* ---------- layout: phone, tablet and laptop ---------- */
+  var css = document.createElement('style');
+  css.textContent = [
+    '.bcgrid{display:grid;gap:14px;margin-top:6px}',
+    '@media (min-width:760px){.bcgrid{grid-template-columns:repeat(3,minmax(0,1fr))}}',
+    '.bcday-card{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;cursor:pointer;font:inherit;color:inherit;border:1.5px solid var(--line);min-height:150px}',
+    '.bcday-card b{font-size:18px;line-height:1.25}',
+    '.bcday-card small{display:flex;gap:6px;align-items:center;color:var(--muted);font-weight:600}',
+    '.bcnum{font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--green)}',
+    '.bcst{align-self:flex-start;margin-top:auto;font-size:13px;font-weight:800;padding:4px 10px;border-radius:999px;background:var(--surface);border:1px solid var(--line)}',
+    '.st-todo .bcst,.bcst.st-todo{background:#FFF4D6;border-color:#F0D98A;color:#5A4300}',
+    '.st-revise .bcst,.bcst.st-revise{background:#FDE7E3;border-color:#F3B7AB;color:#8A2414}',
+    '.st-done .bcst,.bcst.st-done,.st-in .bcst,.bcst.st-in{background:#E6F4DC;border-color:#BFE0A8;color:#255A12}',
+    '.bclock{display:flex;gap:14px;align-items:flex-start;border:1.5px solid #F0D98A;background:#FFFBEE;color:#3D2E00}',
+    '.bclock.open{border-color:#BFE0A8;background:#F2FAEC;color:#1E3F0E}',
+    '.bclock svg{flex:none;width:24px;height:24px;margin-top:2px}',
+    '.bclock p{margin:4px 0 8px}',
+    '.bchero h2{margin:4px 0 6px}',
+    '.bchero p{margin:0 0 10px;color:var(--muted)}',
+    '.bcdaygrid{display:grid;gap:16px}',
+    '.bcmain,.bcside{display:flex;flex-direction:column;gap:14px;min-width:0}',
+    '@media (min-width:1000px){.bcdaygrid{grid-template-columns:minmax(0,1fr) 320px;align-items:start}.bcside{position:sticky;top:16px;order:2}}',
+    '@media (max-width:999px){.bcside{order:-1}}',
+    '.bcwhen{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0 0 10px}',
+    '.bclive .btn{width:100%;justify-content:center}',
+    '.bcmats{display:flex;flex-direction:column;gap:8px}',
+    '.bcitem{display:flex;flex-direction:column;gap:10px}',
+    '.bcitem h3{margin:0}',
+    '.bcopt-tag{font-size:12px;font-weight:700;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:2px 8px;vertical-align:2px}',
+    '.bcitem textarea{width:100%;min-height:110px}',
+    '.bcwc{color:var(--muted);font-weight:600}',
+    '.bcq{border:1.5px solid var(--line);border-radius:14px;padding:12px 14px;margin:0;display:flex;flex-direction:column;gap:6px}',
+    '.bcq legend{font-weight:800;display:flex;gap:8px;padding:0 4px}',
+    '.bcq legend span{flex:none;width:24px;height:24px;border-radius:12px;background:var(--surface);display:inline-grid;place-items:center;font-size:13px}',
+    '.bcq.ok{border-color:#9BCF7C}.bcq.no{border-color:#EBA597}',
+    '.bcopt{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-radius:10px;cursor:pointer}',
+    '.bcopt:hover{background:var(--surface)}',
+    '.bcopt.right{background:#E6F4DC;font-weight:700}.bcopt.wrong{background:#FDE7E3}',
+    '.bcopt input{margin-top:3px;flex:none}',
+    '.bcexp{margin:4px 0 0;color:var(--muted);font-weight:600}',
+    '.bcscore{font-weight:800;margin:0}',
+    '.bcchecks{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:6px}',
+    '.bcchecks.plain{padding-left:20px;list-style:disc}',
+    '.bcchecks label{display:flex;gap:8px;align-items:flex-start}',
+    '.bcsub{margin:0;font-weight:700}',
+    '.bcvideo{width:100%;max-width:560px;border-radius:12px;background:#000;aspect-ratio:4/3}',
+    '.bcrec{display:flex;flex-direction:column;gap:10px}',
+    '.bcrecdot{color:#C2412D;font-weight:800;margin:0}',
+    '.bctimer{font-variant-numeric:tabular-nums;font-weight:800}',
+    '.bcsaved{display:flex;gap:6px;align-items:center;font-weight:700;margin:0;color:#255A12}',
+    '.bcup{display:flex;gap:8px;flex-wrap:wrap;align-items:center}',
+    '.bcup input[type=url]{flex:1;min-width:200px}',
+    '.bcor{color:var(--muted);font-weight:700}',
+    '.bctick{display:flex;gap:10px;align-items:flex-start;font-weight:700}',
+    '.bchand{display:flex;gap:14px;align-items:center;flex-wrap:wrap;justify-content:space-between;border:1.5px solid var(--green)}',
+    '.bchand>div{display:flex;flex-direction:column;gap:2px}',
+    '.bchand small{color:var(--muted);font-weight:600}',
+    '.bchand .pgstatus{flex-basis:100%;margin:0}',
+    '.bcreview{border:1.5px solid #BFE0A8;background:#F2FAEC}',
+    '.bcreview.revise{border-color:#F3B7AB;background:#FFF5F2}',
+    '.bcres{font-size:20px;font-weight:800;margin:0}',
+    '.bcscores{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px}',
+    '.bcscores li{display:flex;justify-content:space-between;gap:12px}',
+    '.bclist{margin:4px 0;padding-left:20px}',
+    '.bcbar{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;margin:6px 0 12px}',
+    '.bcbar .field{min-width:200px}',
+    '.bcrow{display:flex;gap:8px}',
+    '.bctablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:var(--card,#fff);-webkit-overflow-scrolling:touch}',
+    '.bctable{width:100%;border-collapse:collapse;min-width:620px;font-size:14px}',
+    '.bctable th,.bctable td{padding:10px 12px;border-top:1px solid var(--line);text-align:left;vertical-align:top}',
+    '.bctable thead th{border-top:0;background:var(--surface);font-size:13px}',
+    '.bctable tbody th{display:flex;flex-direction:column;gap:2px;min-width:150px}',
+    '.bctable tbody th small{color:var(--muted);font-weight:600}',
+    '.bcatt{display:flex;gap:6px;align-items:center;font-weight:600;margin-bottom:6px}',
+    '.bccell{display:inline-block;font:inherit;font-size:13px;font-weight:800;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--surface);cursor:default}',
+    'button.bccell{cursor:pointer}',
+    '.bccell.new{background:#FFF4D6;border-color:#F0D98A;color:#5A4300}',
+    '.bccell.done{background:#E6F4DC;border-color:#BFE0A8;color:#255A12}',
+    '.bccell.revise{background:#FDE7E3;border-color:#F3B7AB;color:#8A2414}',
+    '.bcunlock{display:flex;flex-direction:column;gap:8px;margin-top:14px}',
+    '.bcurow{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-radius:10px;border:1px solid var(--line)}',
+    '.bcurow span{display:flex;flex-direction:column}',
+    '.bcurow.warn{border-color:#F0D98A;background:#FFFBEE}',
+    '.bcwarn{color:#8A5A00;font-weight:700}',
+    '.bcsched{border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin:10px 0}',
+    '.bcsched legend{font-weight:800;padding:0 4px}',
+    '.bcschedgrid{display:grid;gap:10px;grid-template-columns:1fr 1fr}',
+    '.bcschedgrid .field:first-child{grid-column:1/-1}',
+    '.bcwide{grid-column:1/-1}',
+    '@media (min-width:900px){.bcschedgrid{grid-template-columns:170px 120px 120px minmax(0,1fr)}.bcschedgrid .field:first-child,.bcwide{grid-column:auto}}',
+    '.bcrvgrid{display:grid;gap:16px}',
+    '.bcrvgrid>div{display:flex;flex-direction:column;gap:14px;min-width:0}',
+    '@media (min-width:1000px){.bcrvgrid{grid-template-columns:minmax(0,1fr) 360px;align-items:start}.bcrvgrid>aside{position:sticky;top:16px}}',
+    '.bcscoreform{display:flex;flex-direction:column;gap:10px}',
+    '.bcres-pick{display:flex;flex-direction:column;gap:8px}',
+    '.bcres-pick label,.bcrevise{display:flex;gap:8px;align-items:center;font-weight:700}',
+    '.bccrit{display:flex;flex-direction:column;gap:6px;padding:8px 0;border-top:1px solid var(--line)}',
+    '.bccrit>span:first-child{font-weight:700}',
+    '.bcpick{display:flex;gap:6px}',
+    '.bcpick label{flex:1}',
+    '.bcpick input{position:absolute;opacity:0;pointer-events:none}',
+    '.bcpick span{display:grid;place-items:center;height:40px;border:1.5px solid var(--line);border-radius:10px;font-weight:800;cursor:pointer}',
+    '.bcpick input:checked+span{background:var(--green);border-color:var(--green);color:#fff}',
+    '.bcpick input:focus-visible+span{outline:3px solid var(--green);outline-offset:2px}',
+    '.bchome{margin-bottom:14px}',
+    '.bcwho{display:flex;justify-content:space-between;align-items:center;gap:12px}',
+    '.bcwho>div{display:flex;flex-direction:column;gap:2px;min-width:0}',
+    '.bcwho small{color:var(--muted);font-weight:600;overflow-wrap:anywhere}',
+    '.bcitem .wtext{font-weight:400;white-space:pre-wrap;margin:4px 0 0;padding:10px 12px;background:var(--surface);border-radius:10px}',
+    '.bcwhen svg{flex:none;margin-top:3px}',
+    '.bcwhen{align-items:flex-start!important}',
+    '.bchero .bcst{margin-top:0}',
+    'body.pg-bootcamp .app,body.pg-bctrainer .app{max-width:1180px}'
+  ].join('\n');
+  document.head.appendChild(css);
+})();
+/* END bootcamp.js */
 /* END app.js */
